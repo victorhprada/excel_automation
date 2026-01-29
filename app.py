@@ -7,10 +7,30 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from io import BytesIO
+from openpyxl.utils import get_column_letter
+from copy import copy
 
 # ========================================
 # Funções Auxiliares
 # ========================================
+
+def copiar_estilo(celula_origem, celula_destino):
+    """
+    Copia atributos de formatação de uma célula para outra.
+    
+    Atributos copiados: font, border, fill, number_format, alignment
+    
+    Args:
+        celula_origem: Célula de onde copiar o estilo
+        celula_destino: Célula para onde copiar o estilo
+    """
+    if celula_origem.has_style:
+        celula_destino.font = copy(celula_origem.font)
+        celula_destino.border = copy(celula_origem.border)
+        celula_destino.fill = copy(celula_origem.fill)
+        celula_destino.number_format = celula_origem.number_format
+        celula_destino.alignment = copy(celula_origem.alignment)
+
 
 def validar_abas_necessarias(parceiro_wb, base_wb):
     """
@@ -74,6 +94,81 @@ def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
             ws_destino.cell(row=proxima_linha_destino, column=col_idx, value=valor)
         
         proxima_linha_destino += 1
+        linhas_copiadas += 1
+    
+    return linhas_copiadas
+
+
+def copiar_producao_para_base(ws_origem, ws_destino):
+    """
+    Copia dados da aba 'Produção' para 'BASE' de forma explícita e controlada.
+    
+    CRÍTICO: Usa mapeamento segmentado de colunas:
+    - A-G (1-7): Cópia direta origem -> destino
+    - H (8): Fórmula injetada =F{row} (não vem da origem)
+    - H-J origem (8-10) -> I-K destino (9-11): Deslocamento +1
+    
+    Não copia formatação ou fórmulas da origem (exceto fórmula injetada em H).
+    Copia a formatação da última linha existente na BASE para manter consistência visual.
+    
+    Args:
+        ws_origem: Worksheet de origem (Produção)
+        ws_destino: Worksheet de destino (BASE)
+    
+    Returns:
+        int: Número de linhas copiadas
+    """
+    # 1. Encontrar última linha real em BASE (onde coluna A tem valor)
+    last_row_base = 0
+    for row in range(1, ws_destino.max_row + 1):
+        if ws_destino.cell(row=row, column=1).value is not None:
+            last_row_base = row
+    
+    # Se BASE está vazia, começar da linha 2 (linha 1 é header)
+    if last_row_base == 0:
+        last_row_base = 1
+    
+    new_row = last_row_base + 1
+    linhas_copiadas = 0
+    
+    # 2. Iterar sobre linhas da aba 'Produção' (começando da linha 2)
+    for source_row in range(2, ws_origem.max_row + 1):
+        # Verificar se linha tem dados na coluna A (se não, parar)
+        if ws_origem.cell(row=source_row, column=1).value is None:
+            break
+        
+        # 3. Copiar colunas com mapeamento segmentado
+        # Etapa 3.1: Colunas A-G (1-7) - Cópia direta
+        for col in range(1, 8):  # 1 a 7 (A até G)
+            valor = ws_origem.cell(row=source_row, column=col).value
+            cell_nova = ws_destino.cell(row=new_row, column=col, value=valor)
+            
+            # Copiar formatação da linha molde
+            if last_row_base > 1:
+                cell_molde = ws_destino.cell(row=last_row_base, column=col)
+                copiar_estilo(cell_molde, cell_nova)
+        
+        # Etapa 3.2: Coluna H (8) - Injetar fórmula =F{row}
+        cell_nova = ws_destino.cell(row=new_row, column=8, value=f"=F{new_row}")
+        
+        # Copiar formatação da linha molde
+        if last_row_base > 1:
+            cell_molde = ws_destino.cell(row=last_row_base, column=8)
+            copiar_estilo(cell_molde, cell_nova)
+        
+        # Etapa 3.3: Colunas H-J da origem (8-10) -> I-K do destino (9-11)
+        # Deslocamento: origem_col + 1 = destino_col
+        for origem_col in range(8, 11):  # 8, 9, 10 (H, I, J da origem)
+            destino_col = origem_col + 1  # 9, 10, 11 (I, J, K do destino)
+            valor = ws_origem.cell(row=source_row, column=origem_col).value
+            cell_nova = ws_destino.cell(row=new_row, column=destino_col, value=valor)
+            
+            # Copiar formatação da linha molde
+            if last_row_base > 1:
+                cell_molde = ws_destino.cell(row=last_row_base, column=destino_col)
+                copiar_estilo(cell_molde, cell_nova)
+        
+        new_row += 1
         linhas_copiadas += 1
     
     return linhas_copiadas
@@ -311,6 +406,293 @@ def aplicar_regras_colunas_n_x(ws, target_month, linha_inicio=2):
         'linhas_n_o': linhas_n_o,
         'linhas_q_w': linhas_q_w,
         'ccbs_unicos': len(ccbs_unicos)
+    }
+
+
+def encontrar_colunas_meses(ws_base):
+    """
+    Identifica colunas de meses na aba BASE.
+    
+    Returns:
+        list: [
+            {'nome': 'Setembro', 'indice': 17, 'letra': 'Q'},
+            {'nome': 'Outubro', 'indice': 18, 'letra': 'R'},
+            ...
+        ]
+    """
+    colunas_meses = []
+    
+    # Encontrar índice da coluna P (última coluna antes dos meses)
+    col_p_index = 16  # P = 16
+    
+    # Encontrar índice da coluna V (DATA) - buscar pelo header
+    col_v_index = None
+    for col in range(1, ws_base.max_column + 1):
+        header = ws_base.cell(row=1, column=col).value
+        if header == 'DATA':
+            col_v_index = col
+            break
+    
+    if not col_v_index:
+        # Se não encontrar V, usar max_column
+        col_v_index = ws_base.max_column + 1
+    
+    # Iterar entre P+1 e V-1
+    for col_idx in range(col_p_index + 1, col_v_index):
+        header = ws_base.cell(row=1, column=col_idx).value
+        if header:  # Se tem cabeçalho, é coluna de mês
+            colunas_meses.append({
+                'nome': header,
+                'indice': col_idx,
+                'letra': get_column_letter(col_idx)
+            })
+    
+    return colunas_meses
+
+
+def inserir_coluna_mes(ws_base, target_month, colunas_meses):
+    """
+    Insere nova coluna de mês na aba BASE.
+    
+    Args:
+        ws_base: Worksheet da BASE
+        target_month: String do mês (ex: 'JAN.26')
+        colunas_meses: Lista de colunas de meses existentes
+    
+    Returns:
+        dict: {'nome': 'JAN.26', 'indice': 22, 'letra': 'V'}
+    """
+    # Determinar posição de inserção
+    if colunas_meses:
+        # Inserir após a última coluna de mês
+        ultimo_mes_idx = colunas_meses[-1]['indice']
+        pos_insercao = ultimo_mes_idx + 1
+    else:
+        # Se não há colunas de meses, inserir após P
+        pos_insercao = 17  # Q
+    
+    # Inserir coluna
+    ws_base.insert_cols(pos_insercao)
+    
+    # Definir cabeçalho
+    ws_base.cell(row=1, column=pos_insercao, value=target_month)
+    
+    # Aplicar fórmula COUNTIF em todas as linhas (da linha 2 até última)
+    ultima_linha = encontrar_ultima_linha(ws_base)
+    
+    for row in range(2, ultima_linha + 1):
+        # Fórmula: =COUNTIF('JAN.26'!A:A, BASE!A2)
+        formula = f"=COUNTIF('{target_month}'!A:A,BASE!A{row})"
+        ws_base.cell(row=row, column=pos_insercao, value=formula)
+    
+    return {
+        'nome': target_month,
+        'indice': pos_insercao,
+        'letra': get_column_letter(pos_insercao)
+    }
+
+
+def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
+    """
+    Aplica fórmulas dinâmicas L, M, N em TODAS as linhas da BASE.
+    
+    CRÍTICO: Deve processar TODAS as linhas (da 2 até última), não apenas novas,
+    pois registros antigos podem ter pago no novo mês e precisam ser atualizados.
+    
+    CRÍTICO: Usa APENAS abas locais do workbook, sem referências externas.
+    
+    Args:
+        ws_base: Worksheet da BASE
+        colunas_meses: Lista de colunas de meses (incluindo a nova)
+        base_wb: Workbook da BASE (para validar sheetnames)
+    
+    Returns:
+        int: Número de linhas processadas
+    """
+    ultima_linha = encontrar_ultima_linha(ws_base)
+    linhas_processadas = 0
+    
+    # CORREÇÃO: Construir lista de abas validando contra workbook.sheetnames
+    # Isso garante que APENAS abas locais sejam usadas nas fórmulas
+    abas_meses_validas = []
+    sheetnames_disponiveis = base_wb.sheetnames
+    
+    for col_mes in colunas_meses:
+        nome_header = col_mes['nome']
+        
+        # Validar: essa aba existe localmente no workbook?
+        if nome_header in sheetnames_disponiveis:
+            abas_meses_validas.append(nome_header)
+        # Se não existe, ignorar (não adicionar warning para não poluir UI)
+    
+    # Se não houver abas válidas, retornar erro
+    if not abas_meses_validas:
+        raise ValueError("Nenhuma aba de mês válida encontrada no workbook BASE")
+    
+    # IMPORTANTE: Processar TODAS as linhas (2 até última), não apenas novas
+    # Usar abas_meses_validas (sem referências externas)
+    for row in range(2, ultima_linha + 1):
+        # ===== COLUNA L (12) - Parcela Paga? =====
+        # =IF(OR(NOT(ISERROR(VLOOKUP(A2,'Setembro'!A:A,1,0))), ...), "Sim", "Não")
+        vlookup_parts = []
+        for aba in abas_meses_validas:
+            # Garantir que a referência seja APENAS 'NomeAba'!A:A
+            vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row},'{aba}'!A:A,1,0)))")
+        
+        formula_l = f'=IF(OR({",".join(vlookup_parts)}),"Sim","Não")'
+        cell_l = ws_base.cell(row=row, column=12, value=formula_l)
+        
+        # Copiar formatação da linha anterior
+        if row > 2:
+            linha_molde = row - 1
+            copiar_estilo(ws_base.cell(row=linha_molde, column=12), cell_l)
+        
+        # ===== COLUNA M (13) - Data Pagamento =====
+        # =IFERROR(VLOOKUP(...,'Setembro'!A:N,14,0), IFERROR(..., "Pendente"))
+        formula_m = ""
+        for aba in abas_meses_validas:
+            if formula_m == "":
+                formula_m = f"IFERROR(VLOOKUP(A{row},'{aba}'!A:N,14,0)"
+            else:
+                formula_m += f",IFERROR(VLOOKUP(A{row},'{aba}'!A:N,14,0)"
+        
+        # Fechar todos os IFERRORs e adicionar fallback
+        formula_m += "," + '"Pendente de pagamento"' + ")" * len(abas_meses_validas)
+        formula_m = "=" + formula_m
+        
+        cell_m = ws_base.cell(row=row, column=13, value=formula_m)
+        
+        # Copiar formatação da linha anterior
+        if row > 2:
+            linha_molde = row - 1
+            copiar_estilo(ws_base.cell(row=linha_molde, column=13), cell_m)
+        
+        # ===== COLUNA N (14) - Parcelas Recebidas =====
+        # =COUNTIF('Setembro'!A:A,BASE!A2) + COUNTIF('Outubro'!A:A,BASE!A2) + ...
+        countif_parts = []
+        for aba in abas_meses_validas:
+            countif_parts.append(f"COUNTIF('{aba}'!A:A,BASE!A{row})")
+        
+        formula_n = f'={"+".join(countif_parts)}'
+        cell_n = ws_base.cell(row=row, column=14, value=formula_n)
+        
+        # Copiar formatação da linha anterior
+        if row > 2:
+            linha_molde = row - 1
+            copiar_estilo(ws_base.cell(row=linha_molde, column=14), cell_n)
+        
+        linhas_processadas += 1
+    
+    return linhas_processadas
+
+
+def aplicar_formulas_estaticas(ws_base, linha_inicio):
+    """
+    Aplica fórmulas estáticas O, P, V nas novas linhas.
+    
+    Args:
+        ws_base: Worksheet da BASE
+        linha_inicio: Primeira linha onde começaram os novos dados
+    
+    Returns:
+        int: Número de linhas processadas
+    """
+    ultima_linha = encontrar_ultima_linha(ws_base)
+    
+    # Encontrar índice da coluna V (DATA) dinamicamente
+    col_v_index = None
+    for col in range(1, ws_base.max_column + 1):
+        header = ws_base.cell(row=1, column=col).value
+        if header == 'DATA':
+            col_v_index = col
+            break
+    
+    if not col_v_index:
+        # Se não encontrar, assumir que está após as colunas de meses
+        # (pode precisar ajustar dependendo da inserção)
+        col_v_index = ws_base.max_column
+    
+    linhas_processadas = 0
+    
+    for row in range(linha_inicio, ultima_linha + 1):
+        # Linha molde: linha anterior (row - 1)
+        linha_molde = row - 1
+        
+        # Col O (15) - % Recebimento: =N2/E2
+        cell_o = ws_base.cell(row=row, column=15, value=f"=N{row}/E{row}")
+        if linha_molde >= 2:
+            copiar_estilo(ws_base.cell(row=linha_molde, column=15), cell_o)
+        
+        # Col P (16) - Pendentes: =E2-N2
+        cell_p = ws_base.cell(row=row, column=16, value=f"=E{row}-N{row}")
+        if linha_molde >= 2:
+            copiar_estilo(ws_base.cell(row=linha_molde, column=16), cell_p)
+        
+        # Col V (índice dinâmico) - Helper: =LEFT(F2,10)
+        cell_v = ws_base.cell(row=row, column=col_v_index, value=f"=LEFT(F{row},10)")
+        if linha_molde >= 2:
+            copiar_estilo(ws_base.cell(row=linha_molde, column=col_v_index), cell_v)
+        
+        linhas_processadas += 1
+    
+    return linhas_processadas
+
+
+def atualizar_aba_base(base_wb, parceiro_wb, target_month, linha_inicio_append):
+    """
+    Atualiza a aba BASE com novos dados e fórmulas dinâmicas.
+    
+    IMPORTANTE: As fórmulas dinâmicas (L, M, N) são aplicadas em TODAS as linhas,
+    não apenas nas novas, pois registros antigos podem ter pago no novo mês.
+    
+    Args:
+        base_wb: Workbook do arquivo BASE
+        parceiro_wb: Workbook do arquivo PARCEIRO
+        target_month: String do mês (ex: 'JAN.26')
+        linha_inicio_append: Primeira linha onde foram adicionados dados de Produção
+                           (usado apenas para fórmulas estáticas O, P, V)
+    
+    Returns:
+        dict: {
+            'linhas_producao': int,
+            'coluna_mes_inserida': str,
+            'abas_meses_encontradas': list,
+            'linhas_formulas_aplicadas': int,    # Total de linhas (L, M, N)
+            'linhas_novas_estaticas': int        # Apenas novas (O, P, V)
+        }
+    """
+    # 1. Obter referências
+    ws_base = base_wb['BASE']
+    ws_producao = parceiro_wb['Produção']
+    
+    # 2. Identificar colunas de meses existentes (entre P e V)
+    colunas_meses = encontrar_colunas_meses(ws_base)
+    
+    # 3. Inserir nova coluna de mês
+    col_inserida = inserir_coluna_mes(ws_base, target_month, colunas_meses)
+    
+    # 4. Atualizar colunas_meses com a nova coluna
+    colunas_meses.append(col_inserida)
+    
+    # 5. Aplicar fórmulas dinâmicas (L, M, N) em TODAS as linhas
+    # CRÍTICO: Atualiza todas as linhas, não apenas novas, pois registros
+    # antigos podem ter pago no novo mês e precisam ser atualizados
+    # CORREÇÃO: Passar base_wb para validação de abas locais
+    linhas_processadas = aplicar_formulas_dinamicas(
+        ws_base, 
+        colunas_meses,
+        base_wb  # NOVO: passar workbook para validação
+    )
+    
+    # 6. Aplicar fórmulas estáticas (O, P, V) nas novas linhas
+    linhas_novas = aplicar_formulas_estaticas(ws_base, linha_inicio_append)
+    
+    # 7. Retornar métricas
+    return {
+        'coluna_mes_inserida': target_month,
+        'abas_meses_encontradas': [col['nome'] for col in colunas_meses],
+        'linhas_formulas_aplicadas': linhas_processadas,  # L, M, N (todas)
+        'linhas_novas_estaticas': linhas_novas           # O, P, V (apenas novas)
     }
 
 
@@ -624,25 +1006,60 @@ if processar and arquivos_prontos:
             st.write(f"📊 Estrutura: A-M (dados), N-O (todas linhas), Q-W (CCBs únicos)")
             
             # ==================================================
-            # ETAPA 5: Append 'Produção' → 'BASE'
+            # ETAPA 5: Atualizar Aba BASE
             # ==================================================
-            st.info("📊 Adicionando dados de 'Produção' à aba 'BASE'...")
+            st.info("📊 Atualizando aba BASE (Produção + Fórmulas)...")
             
+            # Sub-etapa 5.1: Identificar linha inicial para append
+            ultima_linha_base_antes = encontrar_ultima_linha(base_wb['BASE'])
+            linha_inicio_append = ultima_linha_base_antes + 1
+            
+            st.write(f"Última linha em BASE antes do append: {ultima_linha_base_antes}")
+            
+            # Sub-etapa 5.2: Append dados de Produção (colunas A-J APENAS)
             ws_producao = parceiro_wb['Produção']
             ws_base = base_wb['BASE']
             
-            # Encontrar última linha preenchida em BASE
-            ultima_linha_base = encontrar_ultima_linha(ws_base)
-            st.write(f"Última linha preenchida em BASE: {ultima_linha_base}")
-            
-            # Copiar dados de Produção para BASE (append)
-            linhas_append = copiar_dados_aba(
+            # CORREÇÃO: Usar nova função que copia explicitamente apenas A-J
+            linhas_append = copiar_producao_para_base(
                 ws_producao,
-                ws_base,
-                incluir_header=False  # Não incluir header
+                ws_base
             )
             
-            st.success(f"✅ {linhas_append} linhas adicionadas à aba 'BASE'")
+            st.success(f"✅ {linhas_append} linhas de Produção adicionadas (colunas A-J)")
+            st.info("ℹ️ Copiados apenas valores das colunas A-J, sem formatação")
+            
+            # Sub-etapa 5.3: Atualizar BASE completa
+            st.info("🔧 Atualizando colunas dinâmicas e fórmulas...")
+            st.warning("⚠️ Atualizando fórmulas em TODAS as linhas (registros antigos + novos)")
+            
+            resultado_base = atualizar_aba_base(
+                base_wb,
+                parceiro_wb,
+                target_month,
+                linha_inicio_append
+            )
+            
+            st.success(f"✅ Aba BASE atualizada com sucesso!")
+            
+            # Métricas
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Coluna Inserida", resultado_base['coluna_mes_inserida'])
+            with col2:
+                st.metric("Abas de Meses", len(resultado_base['abas_meses_encontradas']))
+            with col3:
+                st.metric("Fórmulas L-M-N", resultado_base['linhas_formulas_aplicadas'])
+            with col4:
+                st.metric("Fórmulas O-P-V", resultado_base['linhas_novas_estaticas'])
+            
+            # Detalhes
+            with st.expander("📋 Detalhes da Atualização"):
+                st.write(f"**Abas de meses referenciadas:** {', '.join(resultado_base['abas_meses_encontradas'])}")
+                st.write(f"**Fórmulas dinâmicas (L, M, N):** Atualizadas em TODAS as {resultado_base['linhas_formulas_aplicadas']} linhas")
+                st.write(f"**Fórmulas estáticas (O, P, V):** Aplicadas nas {resultado_base['linhas_novas_estaticas']} novas linhas")
+                st.write(f"**Nova coluna '{target_month}' inserida com fórmula:** =COUNTIF('{target_month}'!A:A,BASE!A#)")
+                st.info("ℹ️ Registros antigos que pagaram no novo mês agora mostram 'Sim' em 'Parcela Paga?'")
             
             # ==================================================
             # ETAPA 6: Filtrar Inadimplentes
