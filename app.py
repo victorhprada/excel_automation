@@ -32,6 +32,26 @@ def copiar_estilo(celula_origem, celula_destino):
         celula_destino.alignment = copy(celula_origem.alignment)
 
 
+def encontrar_coluna_por_header(ws, nome_header):
+    """
+    Busca dinamicamente o índice de uma coluna pelo nome do cabeçalho (linha 1).
+    
+    Args:
+        ws: Worksheet onde buscar
+        nome_header: Nome exato do cabeçalho a procurar (case-sensitive)
+    
+    Returns:
+        int: Índice da coluna (1-based) ou None se não encontrar
+    """
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=1, column=col).value
+        if header == nome_header:
+            return col
+    
+    # Se não encontrar, retornar None (permitir ao chamador decidir)
+    return None
+
+
 def validar_abas_necessarias(parceiro_wb, base_wb):
     """
     Valida se todas as abas necessárias existem nos workbooks.
@@ -425,20 +445,16 @@ def encontrar_colunas_meses(ws_base):
     # Encontrar índice da coluna P (última coluna antes dos meses)
     col_p_index = 16  # P = 16
     
-    # Encontrar índice da coluna V (DATA) - buscar pelo header
-    col_v_index = None
-    for col in range(1, ws_base.max_column + 1):
-        header = ws_base.cell(row=1, column=col).value
-        if header == 'DATA':
-            col_v_index = col
-            break
+    # Encontrar índice da coluna DATA dinamicamente
+    col_data_index = encontrar_coluna_por_header(ws_base, 'DATA')
     
-    if not col_v_index:
-        # Se não encontrar V, usar max_column
-        col_v_index = ws_base.max_column + 1
+    if not col_data_index:
+        # Fallback: assumir que está após a última coluna
+        col_data_index = ws_base.max_column + 1
+        # Log de aviso (não gera erro pois esta função é só para mapear meses)
     
-    # Iterar entre P+1 e V-1
-    for col_idx in range(col_p_index + 1, col_v_index):
+    # Iterar entre P+1 e DATA-1
+    for col_idx in range(col_p_index + 1, col_data_index):
         header = ws_base.cell(row=1, column=col_idx).value
         if header:  # Se tem cabeçalho, é coluna de mês
             colunas_meses.append({
@@ -599,18 +615,18 @@ def aplicar_formulas_estaticas(ws_base, linha_inicio):
     """
     ultima_linha = encontrar_ultima_linha(ws_base)
     
-    # Encontrar índice da coluna V (DATA) dinamicamente
-    col_v_index = None
-    for col in range(1, ws_base.max_column + 1):
-        header = ws_base.cell(row=1, column=col).value
-        if header == 'DATA':
-            col_v_index = col
-            break
+    # Encontrar índice da coluna DATA dinamicamente
+    col_data_index = encontrar_coluna_por_header(ws_base, 'DATA')
     
-    if not col_v_index:
-        # Se não encontrar, assumir que está após as colunas de meses
-        # (pode precisar ajustar dependendo da inserção)
-        col_v_index = ws_base.max_column
+    if not col_data_index:
+        raise ValueError(
+            "CRÍTICO: Coluna 'DATA' não encontrada na aba BASE. "
+            "Verifique se o header da coluna está exatamente como 'DATA' (case-sensitive)."
+        )
+    
+    # Log da coluna encontrada
+    col_data_letra = get_column_letter(col_data_index)
+    print(f"DEBUG: Coluna 'DATA' encontrada no índice {col_data_index} (letra {col_data_letra})")
     
     linhas_processadas = 0
     
@@ -628,10 +644,12 @@ def aplicar_formulas_estaticas(ws_base, linha_inicio):
         if linha_molde >= 2:
             copiar_estilo(ws_base.cell(row=linha_molde, column=16), cell_p)
         
-        # Col V (índice dinâmico) - Helper: =LEFT(F2,10)
-        cell_v = ws_base.cell(row=row, column=col_v_index, value=f"=LEFT(F{row},10)")
+        # Col DATA (índice dinâmico) - Fórmula TEXT para serial number
+        # CRÍTICO: Coluna F contém serial number do Excel (ex: 45992.2548)
+        # Converter para formato dd/mm/aaaa usando TEXT
+        cell_data = ws_base.cell(row=row, column=col_data_index, value=f'=TEXT(F{row},"dd/mm/aaaa")')
         if linha_molde >= 2:
-            copiar_estilo(ws_base.cell(row=linha_molde, column=col_v_index), cell_v)
+            copiar_estilo(ws_base.cell(row=linha_molde, column=col_data_index), cell_data)
         
         linhas_processadas += 1
     
@@ -1032,6 +1050,15 @@ if processar and arquivos_prontos:
             # Sub-etapa 5.3: Atualizar BASE completa
             st.info("🔧 Atualizando colunas dinâmicas e fórmulas...")
             st.warning("⚠️ Atualizando fórmulas em TODAS as linhas (registros antigos + novos)")
+            
+            # Validar coluna DATA antes de processar
+            ws_base_temp = base_wb['BASE']
+            col_data_check = encontrar_coluna_por_header(ws_base_temp, 'DATA')
+            if col_data_check:
+                col_data_letra = get_column_letter(col_data_check)
+                st.write(f"🔍 **Coluna 'DATA' encontrada:** Índice {col_data_check} (letra {col_data_letra})")
+            else:
+                st.error("❌ ERRO: Coluna 'DATA' não encontrada na BASE. Processamento pode falhar.")
             
             resultado_base = atualizar_aba_base(
                 base_wb,
