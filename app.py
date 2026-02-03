@@ -208,8 +208,9 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
     """
     Atualiza o bloco CICLO PMT (linhas 9 a 18) na aba RESUMO.
 
+    Reutiliza a coluna criada pelo bloco Mês Faturamento (linha 2).
     Calcula período de 4 meses antes do target_month (dia 23 ao dia 20),
-    insere nova coluna, preenche fórmulas COUNTIFS/SUMIFS na BASE e na aba do mês,
+    preenche fórmulas COUNTIFS/SUMIFS na BASE e na aba do mês,
     e copia formatação da coluna anterior.
 
     Args:
@@ -220,6 +221,20 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
         None
     """
     ws_resumo = base_wb['RESUMO']
+    
+    # Formatar target_month para o padrão da linha 2: 'jan/26'
+    mes_faturado = target_month.replace('.', '/').lower()
+    
+    # Localizar coluna pelo cabeçalho da linha 2
+    col_idx = None
+    for col in range(1, ws_resumo.max_column + 1):
+        valor_celula = ws_resumo.cell(row=2, column=col).value
+        if valor_celula and str(valor_celula).strip().lower() == mes_faturado:
+            col_idx = col
+            break
+    
+    if not col_idx:
+        raise ValueError(f"Coluna com '{mes_faturado}' não encontrada na linha 2 da aba RESUMO")
     
     # Converter target_month para date e subtrair 4 meses
     meses_eng = {
@@ -245,36 +260,28 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
     # Header: '23/09 a 20/10 - 2025'
     header_str = f"{data_ini.strftime('%d/%m')} a {data_fim.strftime('%d/%m')} - {data_ini.year}"
     
-    # Encontrar última coluna preenchida na linha 9
-    ultima_col = 1
-    for col in range(1, ws_resumo.max_column + 1):
-        if ws_resumo.cell(row=9, column=col).value is not None:
-            ultima_col = col
+    letra = get_column_letter(col_idx)
     
-    nova_coluna = ultima_col + 1
-    ws_resumo.insert_cols(nova_coluna)
-    letra = get_column_letter(nova_coluna)
-    
-    # Preencher linhas 9 a 18
-    ws_resumo.cell(row=9, column=nova_coluna, value=header_str)
-    ws_resumo.cell(row=10, column=nova_coluna, value=f'=COUNTIFS(BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
-    ws_resumo.cell(row=11, column=nova_coluna, value=f'=SUMIFS(BASE!$D:$D,BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
-    ws_resumo.cell(row=12, column=nova_coluna, value=f"=SUM('{target_month}'!L:L)")
-    ws_resumo.cell(row=13, column=nova_coluna, value=f"=COUNTA('{target_month}'!O:O)-1")
-    ws_resumo.cell(row=14, column=nova_coluna, value=f'=COUNTIFS(\'{target_month}\'!R:R,">={data_ini_str}",\'{target_month}\'!R:R,"<={data_fim_str}")')
-    ws_resumo.cell(row=15, column=nova_coluna, value=f"={letra}13-{letra}14")
-    ws_resumo.cell(row=16, column=nova_coluna, value=None)  # Vazio
-    ws_resumo.cell(row=17, column=nova_coluna, value=f"={letra}14-{letra}10")
+    # Preencher linhas 9 a 18 na coluna alinhada
+    ws_resumo.cell(row=9, column=col_idx, value=header_str)
+    ws_resumo.cell(row=10, column=col_idx, value=f'=COUNTIFS(BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
+    ws_resumo.cell(row=11, column=col_idx, value=f'=SUMIFS(BASE!$D:$D,BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
+    ws_resumo.cell(row=12, column=col_idx, value=f"=SUM('{target_month}'!L:L)")
+    ws_resumo.cell(row=13, column=col_idx, value=f"=COUNTA('{target_month}'!O:O)-1")
+    ws_resumo.cell(row=14, column=col_idx, value=f'=COUNTIFS(\'{target_month}\'!R:R,">={data_ini_str}",\'{target_month}\'!R:R,"<={data_fim_str}")')
+    ws_resumo.cell(row=15, column=col_idx, value=f"={letra}13-{letra}14")
+    ws_resumo.cell(row=16, column=col_idx, value=None)  # Vazio
+    ws_resumo.cell(row=17, column=col_idx, value=f"={letra}14-{letra}10")
     
     # Linha 18: copiar fórmula da célula esquerda se houver
-    celula_esq_18 = ws_resumo.cell(row=18, column=nova_coluna - 1)
+    celula_esq_18 = ws_resumo.cell(row=18, column=col_idx - 1)
     if celula_esq_18.value:
-        ws_resumo.cell(row=18, column=nova_coluna, value=celula_esq_18.value)
+        ws_resumo.cell(row=18, column=col_idx, value=celula_esq_18.value)
     else:
-        ws_resumo.cell(row=18, column=nova_coluna, value=None)
+        ws_resumo.cell(row=18, column=col_idx, value=None)
     
-    # Busca inteligente da coluna molde (mesma lógica do bloco Faturamento)
-    col_molde = nova_coluna - 1
+    # Busca inteligente da coluna molde (ignora colunas vazias intermediárias)
+    col_molde = col_idx - 1
     while col_molde >= 1:
         if ws_resumo.cell(row=10, column=col_molde).value is not None:
             break
@@ -284,7 +291,7 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
     if col_molde >= 1:
         for r in range(9, 19):
             celula_origem = ws_resumo.cell(row=r, column=col_molde)
-            celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
+            celula_destino = ws_resumo.cell(row=r, column=col_idx)
             copiar_estilo(celula_origem, celula_destino)
 
 
