@@ -9,6 +9,7 @@ import openpyxl
 from io import BytesIO
 from openpyxl.utils import get_column_letter
 from copy import copy
+from datetime import date
 
 # ========================================
 # Funções Auxiliares
@@ -84,6 +85,95 @@ def encontrar_ultima_linha(ws):
                for col in range(1, ws.max_column + 1)):
             return row
     return 0  # Se worksheet vazia, retornar 0
+
+
+def calcular_mes_anterior(mes_str):
+    """
+    Calcula o mês anterior a partir de target_month (ex: 'JAN.26').
+
+    Converte para datetime (dia 1), subtrai 1 mês e formata como 'mmm/yy'
+    em português (ex: 'dez/25'). JAN.26 -> dez/25.
+
+    Args:
+        mes_str: String no formato 'MMM.AA' (ex: 'JAN.26')
+
+    Returns:
+        str: Mês anterior no formato 'mmm/yy' (ex: 'dez/25')
+    """
+    meses_eng = {
+        'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
+        'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
+    }
+    meses_pt = {
+        1: 'jan', 2: 'fev', 3: 'mar', 4: 'abr', 5: 'mai', 6: 'jun',
+        7: 'jul', 8: 'ago', 9: 'set', 10: 'out', 11: 'nov', 12: 'dez'
+    }
+    partes = mes_str.upper().strip().split('.')
+    mes_abrev = partes[0]
+    ano_2d = int(partes[1])
+    ano = 2000 + ano_2d
+    mes_num = meses_eng[mes_abrev]
+    d = date(ano, mes_num, 1)
+    if mes_num == 1:
+        d_ant = date(ano - 1, 12, 1)
+    else:
+        d_ant = date(ano, mes_num - 1, 1)
+    return f"{meses_pt[d_ant.month]}/{str(d_ant.year)[-2:]}"
+
+
+def encontrar_ultima_coluna_resumo(ws):
+    """
+    Encontra o índice da última coluna preenchida na linha 2 da aba RESUMO.
+
+    Usado para determinar onde inserir a nova coluna de Mês Faturamento.
+
+    Args:
+        ws: Worksheet (aba RESUMO)
+
+    Returns:
+        int: Índice 1-based da última coluna com valor na linha 2, ou 1 se vazia.
+    """
+    ultima = 1
+    for col in range(1, ws.max_column + 1):
+        if ws.cell(row=2, column=col).value is not None:
+            ultima = col
+    return ultima
+
+
+def atualizar_resumo_mes_faturamento(base_wb, target_month):
+    """
+    Atualiza o bloco MÊS FATURAMENTO (linhas 2 a 6) na aba RESUMO.
+
+    Insere uma nova coluna à direita da última preenchida na linha 2,
+    preenche valores e fórmulas (SUMIF/COUNTIF na BASE, comissão 3%),
+    e copia o estilo da coluna anterior.
+
+    Args:
+        base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
+        target_month: String do mês (ex: 'JAN.26')
+
+    Returns:
+        None
+    """
+    ws_resumo = base_wb['RESUMO']
+    ultima_col = encontrar_ultima_coluna_resumo(ws_resumo)
+    nova_coluna = ultima_col + 1
+    ws_resumo.insert_cols(nova_coluna)
+    letra = get_column_letter(nova_coluna)
+
+    mes_faturado = target_month.replace('.', '/').lower()
+    mes_ref = calcular_mes_anterior(target_month)
+
+    ws_resumo.cell(row=2, column=nova_coluna, value=mes_faturado)
+    ws_resumo.cell(row=3, column=nova_coluna, value=mes_ref)
+    ws_resumo.cell(row=4, column=nova_coluna, value=f"=SUMIF(BASE!$K:$K,RESUMO!{letra}3,BASE!$D:$D)")
+    ws_resumo.cell(row=5, column=nova_coluna, value=f"=COUNTIF(BASE!$K:$K,RESUMO!{letra}3)")
+    ws_resumo.cell(row=6, column=nova_coluna, value=f"={letra}4*3%")
+
+    for r in range(2, 7):
+        celula_origem = ws_resumo.cell(row=r, column=nova_coluna - 1)
+        celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
+        copiar_estilo(celula_origem, celula_destino)
 
 
 def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
@@ -1087,6 +1177,19 @@ if processar and arquivos_prontos:
                 st.write(f"**Fórmulas estáticas (O, P, V):** Aplicadas nas {resultado_base['linhas_novas_estaticas']} novas linhas")
                 st.write(f"**Nova coluna '{target_month}' inserida com fórmula:** =COUNTIF('{target_month}'!A:A,BASE!A#)")
                 st.info("ℹ️ Registros antigos que pagaram no novo mês agora mostram 'Sim' em 'Parcela Paga?'")
+            
+            # ==================================================
+            # ETAPA 5.4: Atualizar aba RESUMO (Mês Faturamento)
+            # ==================================================
+            if 'RESUMO' in base_wb.sheetnames:
+                st.info("📊 Atualizando aba RESUMO (bloco Mês Faturamento)...")
+                try:
+                    atualizar_resumo_mes_faturamento(base_wb, target_month)
+                    st.success("✅ Aba RESUMO atualizada (bloco Mês Faturamento).")
+                except Exception as e:
+                    st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
+            else:
+                st.warning("⚠️ Aba RESUMO não encontrada; bloco Mês Faturamento não atualizado.")
             
             # ==================================================
             # ETAPA 6: Filtrar Inadimplentes
