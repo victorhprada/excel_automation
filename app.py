@@ -10,6 +10,7 @@ from io import BytesIO
 from openpyxl.utils import get_column_letter
 from copy import copy, deepcopy
 from datetime import date
+from dateutil.relativedelta import relativedelta
 
 # ========================================
 # Funções Auxiliares
@@ -180,6 +181,90 @@ def atualizar_resumo_mes_faturamento(base_wb, target_month):
     # Copiar estilo da coluna molde (se encontrada)
     if col_molde >= 1:
         for r in range(2, 7):
+            celula_origem = ws_resumo.cell(row=r, column=col_molde)
+            celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
+            copiar_estilo(celula_origem, celula_destino)
+
+
+def atualizar_resumo_ciclo_pmt(base_wb, target_month):
+    """
+    Atualiza o bloco CICLO PMT (linhas 9 a 18) na aba RESUMO.
+
+    Calcula período de 4 meses antes do target_month (dia 23 ao dia 20),
+    insere nova coluna, preenche fórmulas COUNTIFS/SUMIFS na BASE e na aba do mês,
+    e copia formatação da coluna anterior.
+
+    Args:
+        base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
+        target_month: String do mês (ex: 'JAN.26')
+
+    Returns:
+        None
+    """
+    ws_resumo = base_wb['RESUMO']
+    
+    # Converter target_month para date e subtrair 4 meses
+    meses_eng = {
+        'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
+        'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
+    }
+    partes = target_month.upper().strip().split('.')
+    mes_num = meses_eng[partes[0]]
+    ano = 2000 + int(partes[1])
+    
+    data_ref = date(ano, mes_num, 1)
+    data_ref_menos_4 = data_ref - relativedelta(months=4)
+    
+    # Datas do ciclo: dia 23 (início) e dia 20 do mês seguinte (fim)
+    data_ini = date(data_ref_menos_4.year, data_ref_menos_4.month, 23)
+    data_fim_mes = data_ref_menos_4 + relativedelta(months=1)
+    data_fim = date(data_fim_mes.year, data_fim_mes.month, 20)
+    
+    # Strings formatadas para fórmulas Excel
+    data_ini_str = data_ini.strftime("%d/%m/%Y")
+    data_fim_str = data_fim.strftime("%d/%m/%Y")
+    
+    # Header: '23/09 a 20/10 - 2025'
+    header_str = f"{data_ini.strftime('%d/%m')} a {data_fim.strftime('%d/%m')} - {data_ini.year}"
+    
+    # Encontrar última coluna preenchida na linha 9
+    ultima_col = 1
+    for col in range(1, ws_resumo.max_column + 1):
+        if ws_resumo.cell(row=9, column=col).value is not None:
+            ultima_col = col
+    
+    nova_coluna = ultima_col + 1
+    ws_resumo.insert_cols(nova_coluna)
+    letra = get_column_letter(nova_coluna)
+    
+    # Preencher linhas 9 a 18
+    ws_resumo.cell(row=9, column=nova_coluna, value=header_str)
+    ws_resumo.cell(row=10, column=nova_coluna, value=f'=COUNTIFS(BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
+    ws_resumo.cell(row=11, column=nova_coluna, value=f'=SUMIFS(BASE!$D:$D,BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
+    ws_resumo.cell(row=12, column=nova_coluna, value=f"=SUM('{target_month}'!L:L)")
+    ws_resumo.cell(row=13, column=nova_coluna, value=f"=COUNTA('{target_month}'!O:O)-1")
+    ws_resumo.cell(row=14, column=nova_coluna, value=f'=COUNTIFS(\'{target_month}\'!R:R,">={data_ini_str}",\'{target_month}\'!R:R,"<={data_fim_str}")')
+    ws_resumo.cell(row=15, column=nova_coluna, value=f"={letra}13-{letra}14")
+    ws_resumo.cell(row=16, column=nova_coluna, value=None)  # Vazio
+    ws_resumo.cell(row=17, column=nova_coluna, value=f"={letra}14-{letra}10")
+    
+    # Linha 18: copiar fórmula da célula esquerda se houver
+    celula_esq_18 = ws_resumo.cell(row=18, column=nova_coluna - 1)
+    if celula_esq_18.value:
+        ws_resumo.cell(row=18, column=nova_coluna, value=celula_esq_18.value)
+    else:
+        ws_resumo.cell(row=18, column=nova_coluna, value=None)
+    
+    # Busca inteligente da coluna molde (mesma lógica do bloco Faturamento)
+    col_molde = nova_coluna - 1
+    while col_molde >= 1:
+        if ws_resumo.cell(row=10, column=col_molde).value is not None:
+            break
+        col_molde -= 1
+    
+    # Copiar estilo da coluna molde (se encontrada)
+    if col_molde >= 1:
+        for r in range(9, 19):
             celula_origem = ws_resumo.cell(row=r, column=col_molde)
             celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
             copiar_estilo(celula_origem, celula_destino)
@@ -1191,14 +1276,17 @@ if processar and arquivos_prontos:
             # ETAPA 5.4: Atualizar aba RESUMO (Mês Faturamento)
             # ==================================================
             if 'RESUMO' in base_wb.sheetnames:
-                st.info("📊 Atualizando aba RESUMO (bloco Mês Faturamento)...")
+                st.info("📊 Atualizando aba RESUMO (blocos Mês Faturamento e Ciclo PMT)...")
                 try:
                     atualizar_resumo_mes_faturamento(base_wb, target_month)
-                    st.success("✅ Aba RESUMO atualizada (bloco Mês Faturamento).")
+                    st.success("✅ Bloco Mês Faturamento atualizado.")
+                    
+                    atualizar_resumo_ciclo_pmt(base_wb, target_month)
+                    st.success("✅ Bloco Ciclo PMT atualizado.")
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
             else:
-                st.warning("⚠️ Aba RESUMO não encontrada; bloco Mês Faturamento não atualizado.")
+                st.warning("⚠️ Aba RESUMO não encontrada; blocos não atualizados.")
             
             # ==================================================
             # ETAPA 6: Filtrar Inadimplentes
