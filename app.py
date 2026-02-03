@@ -8,7 +8,7 @@ import pandas as pd
 import openpyxl
 from io import BytesIO
 from openpyxl.utils import get_column_letter
-from copy import copy
+from copy import copy, deepcopy
 from datetime import date
 
 # ========================================
@@ -27,7 +27,7 @@ def copiar_estilo(celula_origem, celula_destino):
     """
     if celula_origem.has_style:
         celula_destino.font = copy(celula_origem.font)
-        celula_destino.border = copy(celula_origem.border)
+        celula_destino.border = deepcopy(celula_origem.border)
         celula_destino.fill = copy(celula_origem.fill)
         celula_destino.number_format = celula_origem.number_format
         celula_destino.alignment = copy(celula_origem.alignment)
@@ -170,10 +170,19 @@ def atualizar_resumo_mes_faturamento(base_wb, target_month):
     ws_resumo.cell(row=5, column=nova_coluna, value=f"=COUNTIF(BASE!$K:$K,RESUMO!{letra}3)")
     ws_resumo.cell(row=6, column=nova_coluna, value=f"={letra}4*3%")
 
-    for r in range(2, 7):
-        celula_origem = ws_resumo.cell(row=r, column=nova_coluna - 1)
-        celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
-        copiar_estilo(celula_origem, celula_destino)
+    # Busca inteligente da coluna molde (ignora colunas vazias intermediárias)
+    col_molde = nova_coluna - 1
+    while col_molde >= 1:
+        if ws_resumo.cell(row=4, column=col_molde).value is not None:
+            break
+        col_molde -= 1
+    
+    # Copiar estilo da coluna molde (se encontrada)
+    if col_molde >= 1:
+        for r in range(2, 7):
+            celula_origem = ws_resumo.cell(row=r, column=col_molde)
+            celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
+            copiar_estilo(celula_origem, celula_destino)
 
 
 def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
