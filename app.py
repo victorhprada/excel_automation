@@ -8,7 +8,8 @@ import pandas as pd
 import openpyxl
 from io import BytesIO
 from openpyxl.utils import get_column_letter
-from copy import copy, deepcopy
+from openpyxl.styles import Border
+from copy import copy
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
@@ -22,13 +23,30 @@ def copiar_estilo(celula_origem, celula_destino):
     
     Atributos copiados: font, border, fill, number_format, alignment
     
+    Reconstrução manual de Border para evitar RecursionError com StyleProxy.
+    
     Args:
         celula_origem: Célula de onde copiar o estilo
         celula_destino: Célula para onde copiar o estilo
     """
     if celula_origem.has_style:
         celula_destino.font = copy(celula_origem.font)
-        celula_destino.border = deepcopy(celula_origem.border)
+        
+        # Cópia manual segura para evitar RecursionError em StyleProxy
+        b_origem = celula_origem.border
+        if b_origem:
+            celula_destino.border = Border(
+                left=copy(b_origem.left),
+                right=copy(b_origem.right),
+                top=copy(b_origem.top),
+                bottom=copy(b_origem.bottom),
+                diagonal=copy(b_origem.diagonal),
+                diagonal_direction=b_origem.diagonal_direction,
+                outline=b_origem.outline,
+                vertical=b_origem.vertical,
+                horizontal=b_origem.horizontal
+            )
+        
         celula_destino.fill = copy(celula_origem.fill)
         celula_destino.number_format = celula_origem.number_format
         celula_destino.alignment = copy(celula_origem.alignment)
