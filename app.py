@@ -376,8 +376,8 @@ def preparar_celula_para_escrita(ws, row, col):
 
 def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
-    Atualiza o bloco FATURAMENTO (linhas 20 a 23) na aba RESUMO.
-    Versão com Debug Explícito, Limpeza de Mesclagem e Loop Estruturado.
+    Atualiza o bloco FATURAMENTO (linhas 20 a 23).
+    Tenta escrever direto. Se falhar por mesclagem, remove a mesclagem e reescreve.
     
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
@@ -387,42 +387,51 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     Returns:
         None
     """
-    ws_resumo = base_wb['RESUMO']
+    ws = base_wb['RESUMO']
     mes_faturado = target_month.replace('.', '/').lower()
     letra = get_column_letter(col_idx)
     
-    # LOG VISUAL PARA DEBUG
-    print(f"DEBUG: Escrevendo Bloco Final na Coluna {col_idx} ({letra}) para {mes_faturado}")
+    print(f"DEBUG: Escrevendo Bloco Final na Coluna {col_idx}...")
     
-    # Lista de escritas a fazer: (Linha, Valor)
-    escritas = [
-        (20, mes_faturado),
-        (21, f"={letra}6"),
-        (22, f"={letra}12"),
-        (23, f"=SUM({letra}21:{letra}22)")
-    ]
+    # Dados a serem inseridos
+    dados = {
+        20: mes_faturado,
+        21: f"={letra}6",
+        22: f"={letra}12",
+        23: f"=SUM({letra}21:{letra}22)"
+    }
     
-    # Loop de escrita com limpeza automática
-    for linha, valor in escritas:
-        # 1. Limpa o terreno (Remove mesclagens)
-        preparar_celula_para_escrita(ws_resumo, linha, col_idx)
+    for linha, valor in dados.items():
+        try:
+            # TENTATIVA 1: Apenas coloque o dado!
+            ws.cell(row=linha, column=col_idx).value = valor
+        except AttributeError:
+            # Se caiu aqui, é o erro 'MergedCell... read-only'.
+            # Ação: Encontrar quem está prendendo a célula e soltar.
+            cell = ws.cell(row=linha, column=col_idx)
+            for merged in list(ws.merged_cells.ranges):
+                if cell.coordinate in merged:
+                    ws.unmerge_cells(str(merged))  # Quebra a mesclagem
+                    # TENTATIVA 2: Escreve de novo agora que está livre
+                    ws.cell(row=linha, column=col_idx).value = valor
+                    print(f"DEBUG: Mesclagem removida para escrever em {cell.coordinate}")
+                    break
+    
+    # Cópia de Estilo (Opcional, se falhar não tem problema)
+    try:
+        col_molde = col_idx - 1
+        # Busca coluna anterior com dados para copiar estilo
+        while col_molde >= 1 and ws.cell(row=21, column=col_molde).value is None:
+            col_molde -= 1
         
-        # 2. Escreve o dado
-        ws_resumo.cell(row=linha, column=col_idx).value = valor
-        print(f"DEBUG: Linha {linha} escrita com sucesso: {valor[:50] if len(str(valor)) > 50 else valor}")
-    
-    # Cópia de Estilo (Busca Molde)
-    col_molde = col_idx - 1
-    while col_molde >= 1:
-        if ws_resumo.cell(row=21, column=col_molde).value is not None:
-            break
-        col_molde -= 1
-    
-    if col_molde >= 1:
-        for r in range(20, 24):
-            celula_origem = ws_resumo.cell(row=r, column=col_molde)
-            celula_destino = ws_resumo.cell(row=r, column=col_idx)
-            copiar_estilo(celula_origem, celula_destino)
+        if col_molde >= 1:
+            for r in range(20, 24):
+                try:
+                    copiar_estilo(ws.cell(r, col_molde), ws.cell(r, col_idx))
+                except:
+                    pass
+    except:
+        pass
 
 
 def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
