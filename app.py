@@ -1303,7 +1303,15 @@ processar = st.button(
 
 if processar and arquivos_prontos:
     try:
-        with st.spinner("Processando arquivos..."):
+        # Container para status principal
+        status_container = st.empty()
+        progress_bar = st.progress(0)
+        
+        # Expander para logs detalhados
+        with st.expander("📋 Ver Logs Detalhados", expanded=False):
+            log_area = st.container()
+        
+        with st.spinner("⚙️ Processando... Por favor aguarde."):
             
             # Armazenar target_month
             st.session_state['target_month'] = target_month
@@ -1311,7 +1319,11 @@ if processar and arquivos_prontos:
             # ==================================================
             # ETAPA 1: Carregar Arquivos com Openpyxl
             # ==================================================
-            st.info("📄 Carregando arquivos...")
+            status_container.info("📄 Carregando arquivos...")
+            progress_bar.progress(5)
+            
+            with log_area:
+                st.text("📄 Carregando arquivo PARCEIRO...")
             
             # Carregar PARCEIRO
             arquivo_parceiro.seek(0)
@@ -1320,6 +1332,9 @@ if processar and arquivos_prontos:
                 data_only=True
             )
             
+            with log_area:
+                st.text("📄 Carregando arquivo BASE...")
+            
             # Carregar BASE
             arquivo_base.seek(0)
             base_wb = openpyxl.load_workbook(
@@ -1327,59 +1342,88 @@ if processar and arquivos_prontos:
                 data_only=False  # Preservar fórmulas
             )
             
+            progress_bar.progress(10)
+            
             # ==================================================
             # ETAPA 2: Validar Abas Necessárias
             # ==================================================
-            st.info("🔍 Validando estrutura dos arquivos...")
+            status_container.info("🔍 Validando estrutura dos arquivos...")
+            
+            with log_area:
+                st.text("🔍 Validando abas necessárias...")
             
             valido, mensagem = validar_abas_necessarias(parceiro_wb, base_wb)
             if not valido:
-                st.error(f"❌ {mensagem}")
+                status_container.error(f"❌ {mensagem}")
                 st.stop()
             
-            st.success(f"✅ {mensagem}")
+            with log_area:
+                st.text(f"✅ {mensagem}")
+            
+            progress_bar.progress(15)
             
             # ==================================================
             # ETAPA 3: Clonar Template 'JAN.26' para target_month
             # ==================================================
-            st.info(f"📝 Preparando aba '{target_month}' a partir do template 'JAN.26'...")
+            status_container.info(f"📝 Criando aba '{target_month}'...")
+            progress_bar.progress(20)
+            
+            with log_area:
+                st.text(f"📝 Preparando aba '{target_month}' a partir do template 'JAN.26'...")
             
             # Validar que template JAN.26 existe
             template_existe, mensagem_template = validar_template_jan26(base_wb)
             
             if not template_existe:
-                st.error(f"❌ {mensagem_template}")
-                st.error("A aba 'JAN.26' deve existir no arquivo BASE como template padrão.")
+                status_container.error(f"❌ {mensagem_template}")
+                with log_area:
+                    st.text("❌ A aba 'JAN.26' deve existir no arquivo BASE como template padrão.")
                 st.stop()
             
-            st.success(f"✅ {mensagem_template}")
+            with log_area:
+                st.text(f"✅ {mensagem_template}")
             
             # Remover aba target_month se já existir
             if target_month in base_wb.sheetnames:
-                st.warning(f"⚠️ Aba '{target_month}' já existe. Será substituída.")
+                with log_area:
+                    st.text(f"⚠️ Aba '{target_month}' já existe. Será substituída.")
                 del base_wb[target_month]
             
             # Clonar aba JAN.26 para criar nova aba
-            st.info("📋 Clonando estrutura de 'JAN.26'...")
+            with log_area:
+                st.text("📋 Clonando estrutura de 'JAN.26'...")
+            
             ws_template = base_wb['JAN.26']
             ws_mes = base_wb.copy_worksheet(ws_template)
             ws_mes.title = target_month
             
-            st.success(f"✅ Aba '{target_month}' criada com estrutura idêntica a 'JAN.26'")
-            st.info("ℹ️ Estrutura clonada: Headers, larguras de coluna, formatação")
+            with log_area:
+                st.text(f"✅ Aba '{target_month}' criada")
+                st.text("ℹ️ Estrutura clonada: Headers, larguras de coluna, formatação")
+            
+            progress_bar.progress(25)
             
             # ==================================================
             # ETAPA 4: Limpar, Inserir Dados e Aplicar Regras
             # ==================================================
-            st.info("📋 Processando dados na nova aba...")
+            status_container.info(f"📋 Processando aba '{target_month}'...")
+            progress_bar.progress(30)
             
             # Sub-etapa 4.1: Limpar dados antigos (manter header)
-            st.info("🧹 Limpando dados da linha 2 para baixo...")
+            with log_area:
+                st.text("🧹 Limpando dados antigos...")
+            
             limpar_dados_worksheet(ws_mes, manter_linha_1=True)
-            st.success("✅ Dados antigos removidos (Linha 1 - Headers preservados)")
+            
+            with log_area:
+                st.text("✅ Dados antigos removidos")
+            
+            progress_bar.progress(35)
             
             # Sub-etapa 4.2: Inserir dados do parceiro nas colunas A-M
-            st.info("📥 Inserindo dados de 'Parcelas Pagas' (colunas A-M)...")
+            with log_area:
+                st.text("📥 Inserindo dados de 'Parcelas Pagas'...")
+            
             ws_parcela_paga = parceiro_wb['Parcelas Pagas']
             
             linhas_copiadas = inserir_dados_colunas_especificas(
@@ -1390,10 +1434,14 @@ if processar and arquivos_prontos:
                 linha_destino_inicio=2
             )
             
-            st.success(f"✅ {linhas_copiadas} linhas inseridas nas colunas A-M")
+            with log_area:
+                st.text(f"✅ {linhas_copiadas} linhas inseridas")
+            
+            progress_bar.progress(45)
             
             # Sub-etapa 4.3: Aplicar regras de negócio nas colunas N-X
-            st.info("🔧 Aplicando regras de negócio nas colunas N-X...")
+            with log_area:
+                st.text("🔧 Aplicando regras de negócio...")
             
             resultado = aplicar_regras_colunas_n_x(
                 ws_mes,
@@ -1401,75 +1449,44 @@ if processar and arquivos_prontos:
                 linha_inicio=2
             )
             
-            st.success(f"✅ Regras aplicadas com sucesso!")
+            with log_area:
+                st.text(f"✅ Regras aplicadas ({resultado['ccbs_unicos']} CCBs únicos)")
             
-            # Mostrar métricas
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Linhas N-O", resultado['linhas_n_o'])
-            with col2:
-                st.metric("CCBs Únicos", resultado['ccbs_unicos'])
-            with col3:
-                st.metric("Linhas Q-W", resultado['linhas_q_w'])
-            
-            # Detalhar o que foi aplicado
-            with st.expander("📋 Detalhes das Regras Aplicadas"):
-                st.write("**MOMENTO A - Colunas N-O (todas as linhas):**")
-                st.write(f"- Col N: Mês Faturado formatado ('{target_month.replace('.', '-').lower()}')")
-                st.write("- Col O: Data Desembolso (VLOOKUP)")
-                st.write("- Col P: Separador (vazio)")
-                st.write("")
-                st.write("**MOMENTO B - Colunas Q-W (apenas CCBs únicos):**")
-                st.write("- Col Q: CCB único (deduplicated)")
-                st.write("- Col R: Mês Originação (VLOOKUP)")
-                st.write("- Col S: Repasse (SUMIF)")
-                st.write("- Col T: Data Desemb 1 (VLOOKUP)")
-                st.write("- Col U: Separador (vazio)")
-                st.write("- Col V, W: Vazios")
-                st.write("- Col X: Vazio (sem fórmula)")
-                st.write("")
-                st.info(f"ℹ️ Tabela esquerda (A-P): {resultado['linhas_n_o']} linhas")
-                st.info(f"ℹ️ Tabela direita (Q-W): {resultado['linhas_q_w']} linhas (apenas CCBs únicos)")
-            
-            st.success(f"✅ Aba '{target_month}' configurada com sucesso!")
-            st.write(f"📊 Estrutura: A-M (dados), N-O (todas linhas), Q-W (CCBs únicos)")
+            progress_bar.progress(55)
             
             # ==================================================
             # ETAPA 5: Atualizar Aba BASE
             # ==================================================
-            st.info("📊 Atualizando aba BASE (Produção + Fórmulas)...")
+            status_container.info("📊 Atualizando aba BASE...")
+            progress_bar.progress(60)
+            
+            with log_area:
+                st.text("📊 Atualizando aba BASE (Produção + Fórmulas)...")
             
             # Sub-etapa 5.1: Identificar linha inicial para append
             ultima_linha_base_antes = encontrar_ultima_linha(base_wb['BASE'])
             linha_inicio_append = ultima_linha_base_antes + 1
             
-            st.write(f"Última linha em BASE antes do append: {ultima_linha_base_antes}")
+            with log_area:
+                st.text(f"ℹ️ Última linha em BASE: {ultima_linha_base_antes}")
             
             # Sub-etapa 5.2: Append dados de Produção (colunas A-J APENAS)
             ws_producao = parceiro_wb['Produção']
             ws_base = base_wb['BASE']
             
-            # CORREÇÃO: Usar nova função que copia explicitamente apenas A-J
             linhas_append = copiar_producao_para_base(
                 ws_producao,
                 ws_base
             )
             
-            st.success(f"✅ {linhas_append} linhas de Produção adicionadas (colunas A-J)")
-            st.info("ℹ️ Copiados apenas valores das colunas A-J, sem formatação")
+            with log_area:
+                st.text(f"✅ {linhas_append} linhas de Produção adicionadas")
+            
+            progress_bar.progress(70)
             
             # Sub-etapa 5.3: Atualizar BASE completa
-            st.info("🔧 Atualizando colunas dinâmicas e fórmulas...")
-            st.warning("⚠️ Atualizando fórmulas em TODAS as linhas (registros antigos + novos)")
-            
-            # Validar coluna DATA antes de processar
-            ws_base_temp = base_wb['BASE']
-            col_data_check = encontrar_coluna_por_header(ws_base_temp, 'DATA')
-            if col_data_check:
-                col_data_letra = get_column_letter(col_data_check)
-                st.write(f"🔍 **Coluna 'DATA' encontrada:** Índice {col_data_check} (letra {col_data_letra})")
-            else:
-                st.error("❌ ERRO: Coluna 'DATA' não encontrada na BASE. Processamento pode falhar.")
+            with log_area:
+                st.text("🔧 Aplicando fórmulas dinâmicas em todas as linhas...")
             
             resultado_base = atualizar_aba_base(
                 base_wb,
@@ -1478,58 +1495,62 @@ if processar and arquivos_prontos:
                 linha_inicio_append
             )
             
-            st.success(f"✅ Aba BASE atualizada com sucesso!")
+            with log_area:
+                st.text(f"✅ Aba BASE atualizada")
+                st.text(f"ℹ️ Coluna '{resultado_base['coluna_mes_inserida']}' inserida")
+                st.text(f"ℹ️ {resultado_base['linhas_formulas_aplicadas']} linhas atualizadas")
             
-            # Métricas
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Coluna Inserida", resultado_base['coluna_mes_inserida'])
-            with col2:
-                st.metric("Abas de Meses", len(resultado_base['abas_meses_encontradas']))
-            with col3:
-                st.metric("Fórmulas L-M-N", resultado_base['linhas_formulas_aplicadas'])
-            with col4:
-                st.metric("Fórmulas O-P-V", resultado_base['linhas_novas_estaticas'])
-            
-            # Detalhes
-            with st.expander("📋 Detalhes da Atualização"):
-                st.write(f"**Abas de meses referenciadas:** {', '.join(resultado_base['abas_meses_encontradas'])}")
-                st.write(f"**Fórmulas dinâmicas (L, M, N):** Atualizadas em TODAS as {resultado_base['linhas_formulas_aplicadas']} linhas")
-                st.write(f"**Fórmulas estáticas (O, P, V):** Aplicadas nas {resultado_base['linhas_novas_estaticas']} novas linhas")
-                st.write(f"**Nova coluna '{target_month}' inserida com fórmula:** =COUNTIF('{target_month}'!A:A,BASE!A#)")
-                st.info("ℹ️ Registros antigos que pagaram no novo mês agora mostram 'Sim' em 'Parcela Paga?'")
+            progress_bar.progress(80)
             
             # ==================================================
             # ETAPA 5.4: Atualizar aba RESUMO (Mês Faturamento)
             # ==================================================
+            status_container.info("📝 Atualizando aba RESUMO...")
+            progress_bar.progress(85)
+            
             if 'RESUMO' in base_wb.sheetnames:
-                st.info("📊 Atualizando aba RESUMO (blocos Mês Faturamento e Ciclo PMT)...")
                 try:
+                    with log_area:
+                        st.text("📊 Atualizando blocos da aba RESUMO...")
+                    
                     # Capturar índice da coluna criada
                     coluna_alvo = atualizar_resumo_mes_faturamento(base_wb, target_month)
-                    st.info(f"📍 Coluna identificada para gravação: Índice {coluna_alvo}")
-                    st.success("✅ Bloco Mês Faturamento atualizado.")
+                    
+                    with log_area:
+                        st.text(f"✅ Bloco Mês Faturamento (coluna {coluna_alvo})")
                     
                     atualizar_resumo_ciclo_pmt(base_wb, target_month)
-                    st.success("✅ Bloco Ciclo PMT atualizado.")
+                    
+                    with log_area:
+                        st.text("✅ Bloco Ciclo PMT")
                     
                     # Restaurar headers da tabela REGRA PARA PARCELAMENTO
                     verificar_e_corrigir_headers_regras(base_wb['RESUMO'])
-                    st.success("✅ Headers da tabela Regra para Parcelamento restaurados.")
+                    
+                    with log_area:
+                        st.text("✅ Headers restaurados")
                     
                     # Atualizar bloco final FATURAMENTO (linhas 20-23)
-                    # Passar col_idx explicitamente
                     atualizar_resumo_bloco_final(base_wb, target_month, col_idx=coluna_alvo)
-                    st.success(f"✅ Bloco Faturamento gravado na coluna {coluna_alvo}.")
+                    
+                    with log_area:
+                        st.text("✅ Bloco FATURAMENTO gravado")
+                    
                 except Exception as e:
-                    st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
+                    status_container.error(f"⚠️ Erro ao atualizar RESUMO: {e}")
+                    with log_area:
+                        st.text(f"❌ Erro: {e}")
             else:
-                st.warning("⚠️ Aba RESUMO não encontrada; blocos não atualizados.")
+                with log_area:
+                    st.text("⚠️ Aba RESUMO não encontrada")
+            
+            progress_bar.progress(90)
             
             # ==================================================
             # ETAPA 6: Filtrar Inadimplentes
             # ==================================================
-            st.info("🔍 Filtrando inadimplentes (VALIDAÇÃO = 'Não')...")
+            status_container.info("🔍 Filtrando inadimplentes...")
+            progress_bar.progress(95)
             
             try:
                 inadimplentes = filtrar_inadimplentes(ws_mes)
@@ -1547,12 +1568,17 @@ if processar and arquivos_prontos:
                             ws_inadimplentes.cell(row=proxima_linha_inad, column=col_idx, value=valor)
                         proxima_linha_inad += 1
                     
-                    st.success(f"✅ {len(inadimplentes)} inadimplentes adicionados")
+                    with log_area:
+                        st.text(f"✅ {len(inadimplentes)} inadimplentes adicionados")
                 else:
-                    st.info("ℹ️ Nenhum inadimplente encontrado")
+                    with log_area:
+                        st.text("ℹ️ Nenhum inadimplente encontrado")
                     
             except ValueError as e:
-                st.warning(f"⚠️ {str(e)}")
+                with log_area:
+                    st.text(f"⚠️ {str(e)}")
+            
+            progress_bar.progress(100)
             
             # ==================================================
             # ETAPA 7: Armazenar em Session State
@@ -1560,8 +1586,22 @@ if processar and arquivos_prontos:
             st.session_state['base_workbook_modificado'] = base_wb
             st.session_state['base_filename'] = arquivo_base.name
             st.session_state['processado'] = True
-            
+        
+        # Limpar status e mostrar sucesso final
+        status_container.empty()
+        progress_bar.empty()
+        
         st.success("✅ Processamento concluído com sucesso!")
+        
+        # Mostrar resumo limpo
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Aba Criada", target_month)
+        with col2:
+            st.metric("Linhas Processadas", linhas_copiadas)
+        with col3:
+            st.metric("CCBs Únicos", resultado['ccbs_unicos'])
+        
         st.balloons()
         
     except Exception as e:
