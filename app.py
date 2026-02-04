@@ -349,6 +349,59 @@ def verificar_e_corrigir_headers_regras(ws):
         copiar_estilo(celula_origem, celula)
 
 
+def atualizar_resumo_bloco_final(base_wb, target_month):
+    """
+    Atualiza o bloco FATURAMENTO (linhas 20 a 23) na aba RESUMO.
+
+    Reutiliza a coluna criada pelo bloco Mês Faturamento (linha 2).
+    Preenche fórmulas que referenciam células dos blocos anteriores.
+
+    Args:
+        base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
+        target_month: String do mês (ex: 'JAN.26')
+
+    Returns:
+        None
+    """
+    ws_resumo = base_wb['RESUMO']
+    
+    # Formatar target_month para o padrão da linha 2: 'jan/26'
+    mes_faturado = target_month.replace('.', '/').lower()
+    
+    # Localizar coluna pelo cabeçalho da linha 2
+    col_idx = None
+    for col in range(1, ws_resumo.max_column + 1):
+        valor_celula = ws_resumo.cell(row=2, column=col).value
+        if valor_celula and str(valor_celula).strip().lower() == mes_faturado:
+            col_idx = col
+            break
+    
+    if not col_idx:
+        raise ValueError(f"Coluna com '{mes_faturado}' não encontrada na linha 2 da aba RESUMO")
+    
+    letra = get_column_letter(col_idx)
+    
+    # Preencher linhas 20 a 23 na coluna alinhada
+    ws_resumo.cell(row=20, column=col_idx, value=mes_faturado)
+    ws_resumo.cell(row=21, column=col_idx, value=f"={letra}6")
+    ws_resumo.cell(row=22, column=col_idx, value=f"={letra}12")
+    ws_resumo.cell(row=23, column=col_idx, value=f"=SUM({letra}21:{letra}22)")
+    
+    # Busca inteligente da coluna molde (ignora colunas vazias intermediárias)
+    col_molde = col_idx - 1
+    while col_molde >= 1:
+        if ws_resumo.cell(row=21, column=col_molde).value is not None:
+            break
+        col_molde -= 1
+    
+    # Copiar estilo da coluna molde (se encontrada)
+    if col_molde >= 1:
+        for r in range(20, 24):
+            celula_origem = ws_resumo.cell(row=r, column=col_molde)
+            celula_destino = ws_resumo.cell(row=r, column=col_idx)
+            copiar_estilo(celula_origem, celula_destino)
+
+
 def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
     """
     Copia todos os dados de uma worksheet origem para destino.
@@ -1366,6 +1419,10 @@ if processar and arquivos_prontos:
                     # Restaurar headers da tabela REGRA PARA PARCELAMENTO
                     verificar_e_corrigir_headers_regras(base_wb['RESUMO'])
                     st.success("✅ Headers da tabela Regra para Parcelamento restaurados.")
+                    
+                    # Atualizar bloco final FATURAMENTO (linhas 20-23)
+                    atualizar_resumo_bloco_final(base_wb, target_month)
+                    st.success("✅ Bloco Faturamento (linhas 20-23) atualizado.")
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
             else:
