@@ -9,6 +9,7 @@ import openpyxl
 from io import BytesIO
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Border
+from openpyxl.cell.cell import MergedCell
 from copy import copy
 from datetime import date
 from dateutil.relativedelta import relativedelta
@@ -377,7 +378,7 @@ def preparar_celula_para_escrita(ws, row, col):
 def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
     Atualiza o bloco FATURAMENTO (linhas 20 a 23).
-    Tenta escrever direto. Se falhar por mesclagem, remove a mesclagem e reescreve.
+    Estratégia: Limpeza Agressiva de Mesclagens + Escrita Direta.
     
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
@@ -391,47 +392,61 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     mes_faturado = target_month.replace('.', '/').lower()
     letra = get_column_letter(col_idx)
     
-    print(f"DEBUG: Escrevendo Bloco Final na Coluna {col_idx}...")
+    print(f"DEBUG: Iniciando Bloco Final na Coluna {col_idx} ({letra})")
     
-    # Dados a serem inseridos
-    dados = {
-        20: mes_faturado,
-        21: f"={letra}6",
-        22: f"={letra}12",
-        23: f"=SUM({letra}21:{letra}22)"
-    }
+    # 1. LIMPEZA NUCLEAR DE MESCLAGENS
+    # Varre todas as mesclagens da planilha. Se tocar na nossa coluna/linhas alvo, deleta.
+    linhas_alvo = [20, 21, 22, 23]
+    ranges_para_remover = []
     
-    for linha, valor in dados.items():
-        try:
-            # TENTATIVA 1: Apenas coloque o dado!
-            ws.cell(row=linha, column=col_idx).value = valor
-        except AttributeError:
-            # Se caiu aqui, é o erro 'MergedCell... read-only'.
-            # Ação: Encontrar quem está prendendo a célula e soltar.
-            cell = ws.cell(row=linha, column=col_idx)
-            for merged in list(ws.merged_cells.ranges):
-                if cell.coordinate in merged:
-                    ws.unmerge_cells(str(merged))  # Quebra a mesclagem
-                    # TENTATIVA 2: Escreve de novo agora que está livre
-                    ws.cell(row=linha, column=col_idx).value = valor
-                    print(f"DEBUG: Mesclagem removida para escrever em {cell.coordinate}")
-                    break
-    
-    # Cópia de Estilo (Opcional, se falhar não tem problema)
-    try:
-        col_molde = col_idx - 1
-        # Busca coluna anterior com dados para copiar estilo
-        while col_molde >= 1 and ws.cell(row=21, column=col_molde).value is None:
-            col_molde -= 1
+    for merged_range in ws.merged_cells.ranges:
+        # Verifica se o range mesclado intersecta com nossa coluna e linhas alvo
+        min_col, min_row, max_col, max_row = merged_range.bounds
         
-        if col_molde >= 1:
-            for r in range(20, 24):
-                try:
-                    copiar_estilo(ws.cell(r, col_molde), ws.cell(r, col_idx))
-                except:
-                    pass
-    except:
-        pass
+        # Se a coluna alvo está dentro do range horizontalmente
+        if min_col <= col_idx <= max_col:
+            # E se alguma das linhas alvo está dentro do range verticalmente
+            if any(min_row <= r <= max_row for r in linhas_alvo):
+                ranges_para_remover.append(merged_range)
+    
+    # Remove as mesclagens identificadas (de trás pra frente para evitar erro de índice)
+    for rng in ranges_para_remover:
+        ws.unmerge_cells(str(rng))
+        print(f"✅ DEBUG: Mesclagem {rng} removida para liberar o caminho.")
+    
+    # 2. ESCRITA DOS DADOS (Agora o terreno está limpo)
+    try:
+        # L20: Header
+        ws.cell(row=20, column=col_idx).value = mes_faturado
+        
+        # L21: Referência ao topo (Comissão Originação) -> ={LETRA}6
+        ws.cell(row=21, column=col_idx).value = f"={letra}6"
+        
+        # L22: Referência ao meio (Comissão Parcelas) -> ={LETRA}12
+        ws.cell(row=22, column=col_idx).value = f"={letra}12"
+        
+        # L23: Soma -> =SUM({LETRA}21:{LETRA}22)
+        ws.cell(row=23, column=col_idx).value = f"=SUM({letra}21:{letra}22)"
+        
+        print(f"DEBUG: Dados escritos com sucesso na coluna {letra}")
+    except Exception as e:
+        print(f"⚠️ ERRO CRÍTICO NA ESCRITA: {e}")
+    
+    # 3. CLONAR ESTILO DA COLUNA ANTERIOR (Sugestão do Usuário)
+    try:
+        col_anterior = col_idx - 1
+        if col_anterior > 0:
+            for r in linhas_alvo:
+                source = ws.cell(row=r, column=col_anterior)
+                target = ws.cell(row=r, column=col_idx)
+                # Copia apenas se a origem tiver estilo, ignorando erros
+                if source.has_style:
+                    try:
+                        copiar_estilo(source, target)
+                    except:
+                        pass
+    except Exception as e:
+        print(f"⚠️ Erro ao copiar estilo: {e}")
 
 
 def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
