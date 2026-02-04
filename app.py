@@ -468,10 +468,23 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
         print(f"❌ ERRO CRÍTICO NA ESCRITA: {e}")
         raise
     
-    # PASSO D: Clonar estilo da coluna anterior
+    # PASSO D: Clonar estilo da coluna anterior (Format Painter)
     try:
+        # Busca inteligente da coluna molde (ignora colunas vazias intermediárias)
         col_anterior = col_idx - 1
-        if col_anterior > 0:
+        while col_anterior >= 1:
+            # Verifica se a linha 20 (header) tem valor (indicador de coluna preenchida)
+            if ws.cell(row=20, column=col_anterior).value is not None:
+                break
+            col_anterior -= 1
+        
+        if col_anterior >= 1:
+            # Copiar largura da coluna
+            letra_anterior = get_column_letter(col_anterior)
+            ws.column_dimensions[letra].width = ws.column_dimensions[letra_anterior].width
+            print(f"📏 DEBUG: Largura da coluna {letra} copiada de {letra_anterior}")
+            
+            # Copiar estilo de cada célula (linhas 20-23)
             for r in linhas_alvo:
                 source = ws.cell(row=r, column=col_anterior)
                 target = ws.cell(row=r, column=col_idx)
