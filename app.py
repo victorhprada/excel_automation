@@ -351,10 +351,10 @@ def verificar_e_corrigir_headers_regras(ws):
         copiar_estilo(celula_origem, celula)
 
 
-def garantir_celula_livre(ws, row, col):
+def preparar_celula_para_escrita(ws, row, col):
     """
-    Verifica se a célula está dentro de um intervalo mesclado.
-    Se estiver, desfaz a mesclagem (unmerge) para permitir a escrita.
+    Verifica se a célula alvo é uma MergedCell (parte de uma mesclagem).
+    Se for, identifica o intervalo pai e DESFAZ (unmerge) para liberar a escrita.
     
     Args:
         ws: Worksheet onde verificar
@@ -365,17 +365,19 @@ def garantir_celula_livre(ws, row, col):
         None
     """
     cell = ws.cell(row=row, column=col)
+    
+    # Verifica se a célula está em algum intervalo mesclado
     for merged_range in list(ws.merged_cells.ranges):
         if cell.coordinate in merged_range:
             ws.unmerge_cells(str(merged_range))
-            print(f"DEBUG: Mesclagem removida em {cell.coordinate}")
+            print(f"DEBUG: Mesclagem {merged_range} removida para liberar a célula {cell.coordinate}")
             break
 
 
 def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
     Atualiza o bloco FATURAMENTO (linhas 20 a 23) na aba RESUMO.
-    Versão com Debug Explícito e Limpeza de Mesclagem.
+    Versão com Debug Explícito, Limpeza de Mesclagem e Loop Estruturado.
     
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
@@ -392,22 +394,22 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     # LOG VISUAL PARA DEBUG
     print(f"DEBUG: Escrevendo Bloco Final na Coluna {col_idx} ({letra}) para {mes_faturado}")
     
-    # Escrita Direta (Forçando valores) - Com limpeza de mesclagem
-    # Linha 20 (Header)
-    garantir_celula_livre(ws_resumo, 20, col_idx)
-    ws_resumo.cell(row=20, column=col_idx, value=mes_faturado)
+    # Lista de escritas a fazer: (Linha, Valor)
+    escritas = [
+        (20, mes_faturado),
+        (21, f"={letra}6"),
+        (22, f"={letra}12"),
+        (23, f"=SUM({letra}21:{letra}22)")
+    ]
     
-    # Linha 21 (Faturamento originação)
-    garantir_celula_livre(ws_resumo, 21, col_idx)
-    ws_resumo.cell(row=21, column=col_idx, value=f"={letra}6")
-    
-    # Linha 22 (Faturamento PMT)
-    garantir_celula_livre(ws_resumo, 22, col_idx)
-    ws_resumo.cell(row=22, column=col_idx, value=f"={letra}12")
-    
-    # Linha 23 (TOTAL FATUR)
-    garantir_celula_livre(ws_resumo, 23, col_idx)
-    ws_resumo.cell(row=23, column=col_idx, value=f"=SUM({letra}21:{letra}22)")
+    # Loop de escrita com limpeza automática
+    for linha, valor in escritas:
+        # 1. Limpa o terreno (Remove mesclagens)
+        preparar_celula_para_escrita(ws_resumo, linha, col_idx)
+        
+        # 2. Escreve o dado
+        ws_resumo.cell(row=linha, column=col_idx).value = valor
+        print(f"DEBUG: Linha {linha} escrita com sucesso: {valor[:50] if len(str(valor)) > 50 else valor}")
     
     # Cópia de Estilo (Busca Molde)
     col_molde = col_idx - 1
