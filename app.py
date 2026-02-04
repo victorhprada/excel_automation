@@ -423,6 +423,12 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
             if coord in merged_range:
                 ws.unmerge_cells(str(merged_range))
                 print(f"✅ DEBUG: Mesclagem {merged_range} removida para liberar {coord}")
+                
+                # CRÍTICO: Deletar o cache da célula para forçar recriação
+                if (linha_num, col_idx) in ws._cells:
+                    del ws._cells[(linha_num, col_idx)]
+                    print(f"🔄 DEBUG: Cache da célula {coord} limpo")
+                
                 break
     
     # PASSO C: Escrever dados
