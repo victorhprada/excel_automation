@@ -380,9 +380,12 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     Atualiza o bloco FATURAMENTO (linhas 20 a 23).
     Estratégia: Ler da linha 2 + Destravar linha 20 + Escrever.
     
+    CRÍTICO: Remove mesclagens ANTES de acessar qualquer célula para evitar 
+    erro 'MergedCell' object attribute 'value' is read-only'.
+    
     Imita o processo manual:
     1. Lê o valor da linha 2 (já preenchida por atualizar_resumo_mes_faturamento)
-    2. Destrava a linha 20 removendo mesclagens
+    2. Destrava células usando coordenadas string (sem acessar objetos célula)
     3. Escreve o valor lido + fórmulas
     
     Args:
@@ -408,17 +411,18 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     
     print(f"DEBUG: Valor lido da linha 2: '{valor_linha2}'")
     
-    # PASSO B: Preparar linha 20 - Remover mesclagem se existir
+    # PASSO B: CRÍTICO - Remover mesclagens SEM acessar células
     linhas_alvo = [20, 21, 22, 23]
     
     for linha_num in linhas_alvo:
-        cell_alvo = ws.cell(row=linha_num, column=col_idx)
+        # Construir coordenada como string (ex: "L20") SEM chamar ws.cell()
+        coord = f"{letra}{linha_num}"
         
-        # Verificar se esta célula está em alguma mesclagem
+        # Verificar se essa coordenada está em alguma mesclagem
         for merged_range in list(ws.merged_cells.ranges):
-            if cell_alvo.coordinate in merged_range:
+            if coord in merged_range:
                 ws.unmerge_cells(str(merged_range))
-                print(f"✅ DEBUG: Mesclagem {merged_range} removida para liberar {cell_alvo.coordinate}")
+                print(f"✅ DEBUG: Mesclagem {merged_range} removida para liberar {coord}")
                 break
     
     # PASSO C: Escrever dados
