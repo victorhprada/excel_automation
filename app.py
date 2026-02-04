@@ -1227,11 +1227,11 @@ mes_selecionado = st.sidebar.selectbox(
 )
 
 # Selectbox para Ano
-anos = ['24', '25', '26']
+anos = ['26', '27', '28', '29', '30']
 ano_selecionado = st.sidebar.selectbox(
     "Ano",
     options=anos,
-    index=1  # Default para '25'
+    index=0  # Default para '26' (2026)
 )
 
 # Concatenar para formar target_month no formato MMM.YY
