@@ -177,7 +177,19 @@ def atualizar_resumo_mes_faturamento(base_wb, target_month):
     ws_resumo = base_wb['RESUMO']
     ultima_col = encontrar_ultima_coluna_resumo(ws_resumo)
     nova_coluna = ultima_col + 1
-    ws_resumo.insert_cols(nova_coluna)
+    
+    # Verificação inteligente: se a coluna já está vazia, reutilizar (evita gap)
+    linha2_vazia = ws_resumo.cell(row=2, column=nova_coluna).value is None
+    linha9_vazia = ws_resumo.cell(row=9, column=nova_coluna).value is None
+    linha9_valor = ws_resumo.cell(row=9, column=nova_coluna).value
+    
+    # Se ambas vazias E não for o header 'REGRA PARA PARCELAMENTO', reutilizar coluna
+    eh_header_regras = linha9_valor and 'REGRA' in str(linha9_valor).upper()
+    
+    if not (linha2_vazia and linha9_vazia and not eh_header_regras):
+        # Coluna tem dados ou é header importante: inserir nova coluna
+        ws_resumo.insert_cols(nova_coluna)
+    
     letra = get_column_letter(nova_coluna)
 
     mes_faturado = target_month.replace('.', '/').lower()
@@ -293,6 +305,48 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
             celula_origem = ws_resumo.cell(row=r, column=col_molde)
             celula_destino = ws_resumo.cell(row=r, column=col_idx)
             copiar_estilo(celula_origem, celula_destino)
+
+
+def verificar_e_corrigir_headers_regras(ws):
+    """
+    Restaura os cabeçalhos da tabela REGRA PARA PARCELAMENTO que podem sumir
+    após inserções de colunas.
+    
+    Procura 'REGRA PARA PARCELAMENTO' na linha 9 e força os valores dos headers
+    nas colunas seguintes com formatação de cabeçalho.
+    
+    Args:
+        ws: Worksheet da aba RESUMO
+    
+    Returns:
+        None
+    """
+    # Procurar 'REGRA PARA PARCELAMENTO' na linha 9
+    col_regra = None
+    for col in range(1, ws.max_column + 1):
+        valor = ws.cell(row=9, column=col).value
+        if valor and 'REGRA' in str(valor).upper() and 'PARCELAMENTO' in str(valor).upper():
+            col_regra = col
+            break
+    
+    if not col_regra:
+        return  # Se não encontrar, não faz nada
+    
+    # Forçar valores dos headers nas colunas seguintes
+    headers = [
+        'CICLO PARCELAS',
+        'Repasse DataPrev p/Paketa',
+        'Receita Wiipo'
+    ]
+    
+    for i, header in enumerate(headers, start=1):
+        col_atual = col_regra + i
+        celula = ws.cell(row=9, column=col_atual)
+        celula.value = header
+        
+        # Aplicar estilo de cabeçalho (copiar da coluna REGRA PARA PARCELAMENTO)
+        celula_origem = ws.cell(row=9, column=col_regra)
+        copiar_estilo(celula_origem, celula)
 
 
 def copiar_dados_aba(ws_origem, ws_destino, incluir_header=False):
@@ -1308,6 +1362,10 @@ if processar and arquivos_prontos:
                     
                     atualizar_resumo_ciclo_pmt(base_wb, target_month)
                     st.success("✅ Bloco Ciclo PMT atualizado.")
+                    
+                    # Restaurar headers da tabela REGRA PARA PARCELAMENTO
+                    verificar_e_corrigir_headers_regras(base_wb['RESUMO'])
+                    st.success("✅ Headers da tabela Regra para Parcelamento restaurados.")
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
             else:
