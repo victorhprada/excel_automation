@@ -344,6 +344,24 @@ def verificar_e_corrigir_headers_regras(ws):
     
     for i, header in enumerate(headers, start=1):
         col_atual = col_regra + i
+        
+        # CRÍTICO: Remover mesclagem e limpar cache ANTES de escrever
+        coord = f"{get_column_letter(col_atual)}9"
+        
+        # Verificar se essa coordenada está em alguma mesclagem
+        for merged_range in list(ws.merged_cells.ranges):
+            if coord in merged_range:
+                ws.unmerge_cells(str(merged_range))
+                print(f"✅ DEBUG: Mesclagem {merged_range} removida para liberar header {coord}")
+                
+                # Deletar o cache da célula para forçar recriação
+                if (9, col_atual) in ws._cells:
+                    del ws._cells[(9, col_atual)]
+                    print(f"🔄 DEBUG: Cache da célula {coord} limpo")
+                
+                break
+        
+        # Agora sim escrever o valor
         celula = ws.cell(row=9, column=col_atual)
         celula.value = header
         
