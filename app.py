@@ -172,7 +172,7 @@ def atualizar_resumo_mes_faturamento(base_wb, target_month):
         target_month: String do mês (ex: 'JAN.26')
 
     Returns:
-        None
+        int: Índice (1-based) da coluna criada/reutilizada
     """
     ws_resumo = base_wb['RESUMO']
     ultima_col = encontrar_ultima_coluna_resumo(ws_resumo)
@@ -214,6 +214,8 @@ def atualizar_resumo_mes_faturamento(base_wb, target_month):
             celula_origem = ws_resumo.cell(row=r, column=col_molde)
             celula_destino = ws_resumo.cell(row=r, column=nova_coluna)
             copiar_estilo(celula_origem, celula_destino)
+    
+    return nova_coluna
 
 
 def atualizar_resumo_ciclo_pmt(base_wb, target_month):
@@ -349,36 +351,25 @@ def verificar_e_corrigir_headers_regras(ws):
         copiar_estilo(celula_origem, celula)
 
 
-def atualizar_resumo_bloco_final(base_wb, target_month):
+def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
     Atualiza o bloco FATURAMENTO (linhas 20 a 23) na aba RESUMO.
 
-    Reutiliza a coluna criada pelo bloco Mês Faturamento (linha 2).
+    Reutiliza a coluna criada pelo bloco Mês Faturamento (recebida como parâmetro).
     Preenche fórmulas que referenciam células dos blocos anteriores.
 
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
         target_month: String do mês (ex: 'JAN.26')
+        col_idx: Índice (1-based) da coluna onde escrever os dados
 
     Returns:
         None
     """
     ws_resumo = base_wb['RESUMO']
     
-    # Formatar target_month para o padrão da linha 2: 'jan/26'
+    # Formatar para linha 20
     mes_faturado = target_month.replace('.', '/').lower()
-    
-    # Localizar coluna pelo cabeçalho da linha 2
-    col_idx = None
-    for col in range(1, ws_resumo.max_column + 1):
-        valor_celula = ws_resumo.cell(row=2, column=col).value
-        if valor_celula and str(valor_celula).strip().lower() == mes_faturado:
-            col_idx = col
-            break
-    
-    if not col_idx:
-        raise ValueError(f"Coluna com '{mes_faturado}' não encontrada na linha 2 da aba RESUMO")
-    
     letra = get_column_letter(col_idx)
     
     # Preencher linhas 20 a 23 na coluna alinhada
@@ -1410,7 +1401,8 @@ if processar and arquivos_prontos:
             if 'RESUMO' in base_wb.sheetnames:
                 st.info("📊 Atualizando aba RESUMO (blocos Mês Faturamento e Ciclo PMT)...")
                 try:
-                    atualizar_resumo_mes_faturamento(base_wb, target_month)
+                    # Capturar índice da coluna criada
+                    coluna_alvo = atualizar_resumo_mes_faturamento(base_wb, target_month)
                     st.success("✅ Bloco Mês Faturamento atualizado.")
                     
                     atualizar_resumo_ciclo_pmt(base_wb, target_month)
@@ -1421,7 +1413,8 @@ if processar and arquivos_prontos:
                     st.success("✅ Headers da tabela Regra para Parcelamento restaurados.")
                     
                     # Atualizar bloco final FATURAMENTO (linhas 20-23)
-                    atualizar_resumo_bloco_final(base_wb, target_month)
+                    # Passar col_idx explicitamente
+                    atualizar_resumo_bloco_final(base_wb, target_month, col_idx=coluna_alvo)
                     st.success("✅ Bloco Faturamento (linhas 20-23) atualizado.")
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
