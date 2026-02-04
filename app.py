@@ -354,38 +354,36 @@ def verificar_e_corrigir_headers_regras(ws):
 def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
     Atualiza o bloco FATURAMENTO (linhas 20 a 23) na aba RESUMO.
-
-    Reutiliza a coluna criada pelo bloco Mês Faturamento (recebida como parâmetro).
-    Preenche fórmulas que referenciam células dos blocos anteriores.
-
+    Versão com Debug Explícito.
+    
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
         target_month: String do mês (ex: 'JAN.26')
         col_idx: Índice (1-based) da coluna onde escrever os dados
-
+    
     Returns:
         None
     """
     ws_resumo = base_wb['RESUMO']
-    
-    # Formatar para linha 20
     mes_faturado = target_month.replace('.', '/').lower()
     letra = get_column_letter(col_idx)
     
-    # Preencher linhas 20 a 23 na coluna alinhada
+    # LOG VISUAL PARA DEBUG
+    print(f"DEBUG: Escrevendo Bloco Final na Coluna {col_idx} ({letra}) para {mes_faturado}")
+    
+    # Escrita Direta (Forçando valores)
     ws_resumo.cell(row=20, column=col_idx, value=mes_faturado)
     ws_resumo.cell(row=21, column=col_idx, value=f"={letra}6")
     ws_resumo.cell(row=22, column=col_idx, value=f"={letra}12")
     ws_resumo.cell(row=23, column=col_idx, value=f"=SUM({letra}21:{letra}22)")
     
-    # Busca inteligente da coluna molde (ignora colunas vazias intermediárias)
+    # Cópia de Estilo (Busca Molde)
     col_molde = col_idx - 1
     while col_molde >= 1:
         if ws_resumo.cell(row=21, column=col_molde).value is not None:
             break
         col_molde -= 1
     
-    # Copiar estilo da coluna molde (se encontrada)
     if col_molde >= 1:
         for r in range(20, 24):
             celula_origem = ws_resumo.cell(row=r, column=col_molde)
@@ -1403,6 +1401,7 @@ if processar and arquivos_prontos:
                 try:
                     # Capturar índice da coluna criada
                     coluna_alvo = atualizar_resumo_mes_faturamento(base_wb, target_month)
+                    st.info(f"📍 Coluna identificada para gravação: Índice {coluna_alvo}")
                     st.success("✅ Bloco Mês Faturamento atualizado.")
                     
                     atualizar_resumo_ciclo_pmt(base_wb, target_month)
@@ -1415,7 +1414,7 @@ if processar and arquivos_prontos:
                     # Atualizar bloco final FATURAMENTO (linhas 20-23)
                     # Passar col_idx explicitamente
                     atualizar_resumo_bloco_final(base_wb, target_month, col_idx=coluna_alvo)
-                    st.success("✅ Bloco Faturamento (linhas 20-23) atualizado.")
+                    st.success(f"✅ Bloco Faturamento gravado na coluna {coluna_alvo}.")
                 except Exception as e:
                     st.warning(f"⚠️ Erro ao atualizar RESUMO: {e}")
             else:
