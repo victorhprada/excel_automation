@@ -378,46 +378,53 @@ def preparar_celula_para_escrita(ws, row, col):
 def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
     Atualiza o bloco FATURAMENTO (linhas 20 a 23).
-    Estratégia: Limpeza Agressiva de Mesclagens + Escrita Direta.
+    Estratégia: Ler da linha 2 + Destravar linha 20 + Escrever.
+    
+    Imita o processo manual:
+    1. Lê o valor da linha 2 (já preenchida por atualizar_resumo_mes_faturamento)
+    2. Destrava a linha 20 removendo mesclagens
+    3. Escreve o valor lido + fórmulas
     
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
-        target_month: String do mês (ex: 'JAN.26')
+        target_month: String do mês (ex: 'JAN.26') - usado apenas para referência
         col_idx: Índice (1-based) da coluna onde escrever os dados
     
     Returns:
         None
     """
     ws = base_wb['RESUMO']
-    mes_faturado = target_month.replace('.', '/').lower()
     letra = get_column_letter(col_idx)
     
     print(f"DEBUG: Iniciando Bloco Final na Coluna {col_idx} ({letra})")
     
-    # 1. LIMPEZA NUCLEAR DE MESCLAGENS
-    # Varre todas as mesclagens da planilha. Se tocar na nossa coluna/linhas alvo, deleta.
+    # PASSO A: Ler valor da linha 2 (já preenchida anteriormente)
+    valor_linha2 = ws.cell(row=2, column=col_idx).value
+    
+    if not valor_linha2:
+        print(f"⚠️ AVISO: Linha 2 da coluna {letra} está vazia!")
+        # Fallback: usar target_month formatado
+        valor_linha2 = target_month.replace('.', '/').lower()
+    
+    print(f"DEBUG: Valor lido da linha 2: '{valor_linha2}'")
+    
+    # PASSO B: Preparar linha 20 - Remover mesclagem se existir
     linhas_alvo = [20, 21, 22, 23]
-    ranges_para_remover = []
     
-    for merged_range in ws.merged_cells.ranges:
-        # Verifica se o range mesclado intersecta com nossa coluna e linhas alvo
-        min_col, min_row, max_col, max_row = merged_range.bounds
+    for linha_num in linhas_alvo:
+        cell_alvo = ws.cell(row=linha_num, column=col_idx)
         
-        # Se a coluna alvo está dentro do range horizontalmente
-        if min_col <= col_idx <= max_col:
-            # E se alguma das linhas alvo está dentro do range verticalmente
-            if any(min_row <= r <= max_row for r in linhas_alvo):
-                ranges_para_remover.append(merged_range)
+        # Verificar se esta célula está em alguma mesclagem
+        for merged_range in list(ws.merged_cells.ranges):
+            if cell_alvo.coordinate in merged_range:
+                ws.unmerge_cells(str(merged_range))
+                print(f"✅ DEBUG: Mesclagem {merged_range} removida para liberar {cell_alvo.coordinate}")
+                break
     
-    # Remove as mesclagens identificadas (de trás pra frente para evitar erro de índice)
-    for rng in ranges_para_remover:
-        ws.unmerge_cells(str(rng))
-        print(f"✅ DEBUG: Mesclagem {rng} removida para liberar o caminho.")
-    
-    # 2. ESCRITA DOS DADOS (Agora o terreno está limpo)
+    # PASSO C: Escrever dados
     try:
-        # L20: Header
-        ws.cell(row=20, column=col_idx).value = mes_faturado
+        # L20: Colar o valor lido da linha 2
+        ws.cell(row=20, column=col_idx).value = valor_linha2
         
         # L21: Referência ao topo (Comissão Originação) -> ={LETRA}6
         ws.cell(row=21, column=col_idx).value = f"={letra}6"
@@ -428,18 +435,18 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
         # L23: Soma -> =SUM({LETRA}21:{LETRA}22)
         ws.cell(row=23, column=col_idx).value = f"=SUM({letra}21:{letra}22)"
         
-        print(f"DEBUG: Dados escritos com sucesso na coluna {letra}")
+        print(f"✅ DEBUG: Dados escritos com sucesso na coluna {letra}")
     except Exception as e:
-        print(f"⚠️ ERRO CRÍTICO NA ESCRITA: {e}")
+        print(f"❌ ERRO CRÍTICO NA ESCRITA: {e}")
+        raise
     
-    # 3. CLONAR ESTILO DA COLUNA ANTERIOR (Sugestão do Usuário)
+    # PASSO D: Clonar estilo da coluna anterior
     try:
         col_anterior = col_idx - 1
         if col_anterior > 0:
             for r in linhas_alvo:
                 source = ws.cell(row=r, column=col_anterior)
                 target = ws.cell(row=r, column=col_idx)
-                # Copia apenas se a origem tiver estilo, ignorando erros
                 if source.has_style:
                     try:
                         copiar_estilo(source, target)
