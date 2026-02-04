@@ -351,10 +351,31 @@ def verificar_e_corrigir_headers_regras(ws):
         copiar_estilo(celula_origem, celula)
 
 
+def garantir_celula_livre(ws, row, col):
+    """
+    Verifica se a célula está dentro de um intervalo mesclado.
+    Se estiver, desfaz a mesclagem (unmerge) para permitir a escrita.
+    
+    Args:
+        ws: Worksheet onde verificar
+        row: Linha da célula (1-based)
+        col: Coluna da célula (1-based)
+    
+    Returns:
+        None
+    """
+    cell = ws.cell(row=row, column=col)
+    for merged_range in list(ws.merged_cells.ranges):
+        if cell.coordinate in merged_range:
+            ws.unmerge_cells(str(merged_range))
+            print(f"DEBUG: Mesclagem removida em {cell.coordinate}")
+            break
+
+
 def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     """
     Atualiza o bloco FATURAMENTO (linhas 20 a 23) na aba RESUMO.
-    Versão com Debug Explícito.
+    Versão com Debug Explícito e Limpeza de Mesclagem.
     
     Args:
         base_wb: Workbook do arquivo BASE (deve conter aba 'RESUMO')
@@ -371,10 +392,21 @@ def atualizar_resumo_bloco_final(base_wb, target_month, col_idx):
     # LOG VISUAL PARA DEBUG
     print(f"DEBUG: Escrevendo Bloco Final na Coluna {col_idx} ({letra}) para {mes_faturado}")
     
-    # Escrita Direta (Forçando valores)
+    # Escrita Direta (Forçando valores) - Com limpeza de mesclagem
+    # Linha 20 (Header)
+    garantir_celula_livre(ws_resumo, 20, col_idx)
     ws_resumo.cell(row=20, column=col_idx, value=mes_faturado)
+    
+    # Linha 21 (Faturamento originação)
+    garantir_celula_livre(ws_resumo, 21, col_idx)
     ws_resumo.cell(row=21, column=col_idx, value=f"={letra}6")
+    
+    # Linha 22 (Faturamento PMT)
+    garantir_celula_livre(ws_resumo, 22, col_idx)
     ws_resumo.cell(row=22, column=col_idx, value=f"={letra}12")
+    
+    # Linha 23 (TOTAL FATUR)
+    garantir_celula_livre(ws_resumo, 23, col_idx)
     ws_resumo.cell(row=23, column=col_idx, value=f"=SUM({letra}21:{letra}22)")
     
     # Cópia de Estilo (Busca Molde)
