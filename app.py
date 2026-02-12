@@ -13,6 +13,8 @@ from openpyxl.cell.cell import MergedCell
 from copy import copy
 from datetime import date
 from dateutil.relativedelta import relativedelta
+import re
+from datetime import datetime
 
 # ========================================
 # Funções Auxiliares
@@ -921,89 +923,119 @@ def inserir_coluna_mes(ws_base, target_month, colunas_meses):
 
 def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
     """
-    Aplica fórmulas dinâmicas L, M, N em TODAS as linhas da BASE.
-    Versão Corrigida: Prioriza datas mais antigas na Coluna M.
+    Aplica fórmulas dinâmicas na BASE.
+    VERSÃO ROBUSTA:
+    1. Busca abas por padrão de nome (MMM.YY) e não pelo header.
+    2. Identifica dinamicamente a coluna de data em cada aba (resolve o problema 11 vs 14).
+    3. Cria IFERROR priorizando o primeiro pagamento encontrado.
     """
     ultima_linha = encontrar_ultima_linha(ws_base)
     linhas_processadas = 0
     
-    # 1. Validar abas existentes
-    abas_meses_validas = []
-    sheetnames_disponiveis = base_wb.sheetnames
+    # --- 1. IDENTIFICAÇÃO INTELIGENTE DE ABAS ---
+    # Mapeamento de meses para ordenação
+    meses_map = {
+        'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
+        'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
+    }
     
-    for col_mes in colunas_meses:
-        nome_header = col_mes['nome']
-        if nome_header in sheetnames_disponiveis:
-            abas_meses_validas.append(nome_header)
+    abas_cronologicas = []
     
-    if not abas_meses_validas:
-        raise ValueError("Nenhuma aba de mês válida encontrada no workbook BASE")
+    # Regex para capturar abas no formato MMM.YY (ex: SET.25, JAN.26)
+    padrao_aba = re.compile(r'^([A-Z]{3})\.(\d{2})$', re.IGNORECASE)
     
-    # ==========================================================================
-    # CORREÇÃO CRÍTICA PARA COLUNA M (Data Pagamento)
-    # Para manter a data do PRIMEIRO pagamento, a fórmula VLOOKUP deve procurar
-    # primeiro nas abas mais ANTIGAS.
-    # Vamos criar uma lista ordenada para isso.
-    # (Assumindo que colunas_meses vem na ordem cronológica de criação)
-    # ==========================================================================
-    abas_ordenadas_para_data = list(abas_meses_validas) 
-    # Se sua lista vem [Jan, Fev, Mar], o VLOOKUP na ordem normal (Jan -> Fev) 
-    # já prioriza Jan (o mais antigo). 
-    # Se o problema é que está vindo Fev, talvez a lista esteja invertida ou 
-    # a lógica do IFERROR precise ser ajustada.
-    
-    # Lógica do IFERROR: =IFERROR(Busca_Aba1, IFERROR(Busca_Aba2, ...))
-    # Se achar na Aba1, ele PARA e usa o valor da Aba1.
-    # Portanto, Aba1 deve ser o mês MAIS ANTIGO.
-    
-    print(f"DEBUG: Ordem de prioridade para Data (Primeiro encontrado vence): {abas_ordenadas_para_data}")
-
-    for row in range(2, ultima_linha + 1):
-        # ===== COLUNA L (12) - Parcela Paga? =====
-        vlookup_parts = []
-        for aba in abas_meses_validas:
-            vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row},'{aba}'!A:A,1,0)))")
-        
-        formula_l = f'=IF(OR({",".join(vlookup_parts)}),"Sim","Não")'
-        cell_l = ws_base.cell(row=row, column=12, value=formula_l)
-        
-        # ===== COLUNA M (13) - Data Pagamento (CORRIGIDO) =====
-        # Monta a fórmula aninhada respeitando a ordem cronológica
-        formula_m_parts = []
-        
-        # Estratégia: Criar estrutura IFERROR aninhada
-        # =IFERROR(VLOOKUP_MES_ANTIGO, IFERROR(VLOOKUP_MES_NOVO, "Pendente"))
-        
-        formula_final_m = f'"{ "Pendente de pagamento" }"' # Valor padrão (fallback)
-        
-        # Iteramos de TRÁS PRA FRENTE (do mais novo para o mais antigo)
-        # para montar a "cebola" do IFERROR.
-        # Ex: IFERROR(Jan, IFERROR(Fev, "Pendente")) -> Se Jan acha, usa Jan.
-        # Para isso funcionar, a lista 'abas_meses_validas' tem que estar [Jan, Fev]
-        # E nós construímos a string envolvendo o valor anterior.
-        
-        # Passo 1: Começa com o fallback
-        expr_atual = '"Pendente de pagamento"'
-        
-        # Passo 2: Envolve com os meses (do mais novo para o mais antigo)
-        # Se abas = [Jan, Fev, Mar]
-        # Iteração 1 (Mar): IFERROR(VLOOKUP_MAR, "Pendente")
-        # Iteração 2 (Fev): IFERROR(VLOOKUP_FEV, IFERROR(VLOOKUP_MAR, "Pendente"))
-        # Iteração 3 (Jan): IFERROR(VLOOKUP_JAN, IFERROR(VLOOKUP_FEV, ...)) -> Jan tem prioridade!
-        
-        for aba in reversed(abas_meses_validas):
-            vlookup = f"VLOOKUP(A{row},'{aba}'!A:N,14,0)"
-            expr_atual = f"IFERROR({vlookup}, {expr_atual})"
+    for sheet_name in base_wb.sheetnames:
+        match = padrao_aba.match(sheet_name)
+        if match:
+            mes_str, ano_str = match.groups()
+            mes_num = meses_map.get(mes_str.upper())
             
-        formula_m = "=" + expr_atual
-        cell_m = ws_base.cell(row=row, column=13, value=formula_m)
+            if mes_num:
+                # Criar objeto data para ordenar corretamente (Set/25 < Jan/26)
+                data_ordem = datetime(int("20" + ano_str), mes_num, 1)
+                abas_cronologicas.append({
+                    'nome': sheet_name,
+                    'data': data_ordem
+                })
+    
+    # Ordenar do mais antigo para o mais novo
+    abas_cronologicas.sort(key=lambda x: x['data'])
+    
+    if not abas_cronologicas:
+        print("⚠️ AVISO: Nenhuma aba de mês (padrão MMM.YY) encontrada.")
+        return 0
+
+    print(f"✅ Abas identificadas para fórmula: {[a['nome'] for a in abas_cronologicas]}")
+
+    # --- 2. MAPEAMENTO DINÂMICO DE COLUNAS ---
+    # Para cada aba, descobre qual coluna tem a "Data de pagmt" (Header)
+    # Evita erro de usar coluna 14 em aba que só vai até a 11
+    config_abas = []
+    for aba_info in abas_cronologicas:
+        nome_aba = aba_info['nome']
+        ws_mes = base_wb[nome_aba]
         
+        # Procura o header na linha 1
+        col_idx_encontrado = 14 # Fallback padrão
+        col_letra = 'N'
+        
+        for col in range(1, 20): # Varre as primeiras 20 colunas
+            valor = ws_mes.cell(row=1, column=col).value
+            if valor and "Data de pagmt" in str(valor): # Busca parcial
+                col_idx_encontrado = col
+                col_letra = get_column_letter(col)
+                break
+        
+        config_abas.append({
+            'nome': nome_aba,
+            'col_idx': col_idx_encontrado,
+            'col_letra': col_letra
+        })
+
+    # --- 3. APLICAÇÃO DAS FÓRMULAS ---
+    for row in range(2, ultima_linha + 1):
+        
+        # ===== COLUNA L (12) - Parcela Paga? =====
+        # Simples OR check em todas as abas
+        vlookup_parts = []
+        for cfg in config_abas:
+            aba = cfg['nome']
+            vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row};'{aba}'!A:A;1;0)))")
+        
+        formula_l = f'=IF(OR({";".join(vlookup_parts)});"Sim";"Não")'
+        ws_base.cell(row=row, column=12, value=formula_l)
+
+        # ===== COLUNA M (13) - Data Pagamento (A CORREÇÃO PRINCIPAL) =====
+        # Constrói o IFERROR aninhado.
+        # Estratégia: IFERROR(Antigo, IFERROR(Novo, "Pendente"))
+        # Isso garante que se o Antigo achar, ele ganha.
+        
+        # Começamos de trás para frente (Do mais NOVO para o mais ANTIGO)
+        # para que o mês mais ANTIGO fique na camada mais externa da fórmula.
+        
+        formula_m_atual = '"Pendente de pagamento"'
+        
+        for cfg in reversed(config_abas):
+            aba = cfg['nome']
+            col_idx = cfg['col_idx']
+            col_letra = cfg['col_letra'] # Ex: 'K', 'L', 'N'
+            
+            # Monta o VLOOKUP específico dessa aba com a coluna certa
+            vlookup = f"VLOOKUP(A{row};'{aba}'!A:{col_letra};{col_idx};0)"
+            
+            # Envelopa com IFERROR
+            formula_m_atual = f"IFERROR({vlookup}; {formula_m_atual})"
+            
+        ws_base.cell(row=row, column=13, value="=" + formula_m_atual)
+
         # ===== COLUNA N (14) - Parcelas Recebidas =====
         countif_parts = []
-        for aba in abas_meses_validas:
-            countif_parts.append(f"COUNTIF('{aba}'!A:A,BASE!A{row})")
+        for cfg in config_abas:
+            aba = cfg['nome']
+            countif_parts.append(f"COUNTIF('{aba}'!A:A;BASE!A{row})")
+            
         formula_n = f'={"+".join(countif_parts)}'
-        cell_n = ws_base.cell(row=row, column=14, value=formula_n)
+        ws_base.cell(row=row, column=14, value=formula_n)
         
         # Copiar Estilos (Unificado)
         if row > 2:
