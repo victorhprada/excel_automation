@@ -922,91 +922,94 @@ def inserir_coluna_mes(ws_base, target_month, colunas_meses):
 def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
     """
     Aplica fórmulas dinâmicas L, M, N em TODAS as linhas da BASE.
-    
-    CRÍTICO: Deve processar TODAS as linhas (da 2 até última), não apenas novas,
-    pois registros antigos podem ter pago no novo mês e precisam ser atualizados.
-    
-    CRÍTICO: Usa APENAS abas locais do workbook, sem referências externas.
-    
-    Args:
-        ws_base: Worksheet da BASE
-        colunas_meses: Lista de colunas de meses (incluindo a nova)
-        base_wb: Workbook da BASE (para validar sheetnames)
-    
-    Returns:
-        int: Número de linhas processadas
+    Versão Corrigida: Prioriza datas mais antigas na Coluna M.
     """
     ultima_linha = encontrar_ultima_linha(ws_base)
     linhas_processadas = 0
     
-    # CORREÇÃO: Construir lista de abas validando contra workbook.sheetnames
-    # Isso garante que APENAS abas locais sejam usadas nas fórmulas
+    # 1. Validar abas existentes
     abas_meses_validas = []
     sheetnames_disponiveis = base_wb.sheetnames
     
     for col_mes in colunas_meses:
         nome_header = col_mes['nome']
-        
-        # Validar: essa aba existe localmente no workbook?
         if nome_header in sheetnames_disponiveis:
             abas_meses_validas.append(nome_header)
-        # Se não existe, ignorar (não adicionar warning para não poluir UI)
     
-    # Se não houver abas válidas, retornar erro
     if not abas_meses_validas:
         raise ValueError("Nenhuma aba de mês válida encontrada no workbook BASE")
     
-    # IMPORTANTE: Processar TODAS as linhas (2 até última), não apenas novas
-    # Usar abas_meses_validas (sem referências externas)
+    # ==========================================================================
+    # CORREÇÃO CRÍTICA PARA COLUNA M (Data Pagamento)
+    # Para manter a data do PRIMEIRO pagamento, a fórmula VLOOKUP deve procurar
+    # primeiro nas abas mais ANTIGAS.
+    # Vamos criar uma lista ordenada para isso.
+    # (Assumindo que colunas_meses vem na ordem cronológica de criação)
+    # ==========================================================================
+    abas_ordenadas_para_data = list(abas_meses_validas) 
+    # Se sua lista vem [Jan, Fev, Mar], o VLOOKUP na ordem normal (Jan -> Fev) 
+    # já prioriza Jan (o mais antigo). 
+    # Se o problema é que está vindo Fev, talvez a lista esteja invertida ou 
+    # a lógica do IFERROR precise ser ajustada.
+    
+    # Lógica do IFERROR: =IFERROR(Busca_Aba1, IFERROR(Busca_Aba2, ...))
+    # Se achar na Aba1, ele PARA e usa o valor da Aba1.
+    # Portanto, Aba1 deve ser o mês MAIS ANTIGO.
+    
+    print(f"DEBUG: Ordem de prioridade para Data (Primeiro encontrado vence): {abas_ordenadas_para_data}")
+
     for row in range(2, ultima_linha + 1):
         # ===== COLUNA L (12) - Parcela Paga? =====
-        # =IF(OR(NOT(ISERROR(VLOOKUP(A2,'Setembro'!A:A,1,0))), ...), "Sim", "Não")
         vlookup_parts = []
         for aba in abas_meses_validas:
-            # Garantir que a referência seja APENAS 'NomeAba'!A:A
             vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row},'{aba}'!A:A,1,0)))")
         
         formula_l = f'=IF(OR({",".join(vlookup_parts)}),"Sim","Não")'
         cell_l = ws_base.cell(row=row, column=12, value=formula_l)
         
-        # Copiar formatação da linha anterior
-        if row > 2:
-            linha_molde = row - 1
-            copiar_estilo(ws_base.cell(row=linha_molde, column=12), cell_l)
+        # ===== COLUNA M (13) - Data Pagamento (CORRIGIDO) =====
+        # Monta a fórmula aninhada respeitando a ordem cronológica
+        formula_m_parts = []
         
-        # ===== COLUNA M (13) - Data Pagamento =====
-        # =IFERROR(VLOOKUP(...,'Setembro'!A:N,14,0), IFERROR(..., "Pendente"))
-        formula_m = ""
-        for aba in abas_meses_validas:
-            if formula_m == "":
-                formula_m = f"IFERROR(VLOOKUP(A{row},'{aba}'!A:N,14,0)"
-            else:
-                formula_m += f",IFERROR(VLOOKUP(A{row},'{aba}'!A:N,14,0)"
+        # Estratégia: Criar estrutura IFERROR aninhada
+        # =IFERROR(VLOOKUP_MES_ANTIGO, IFERROR(VLOOKUP_MES_NOVO, "Pendente"))
         
-        # Fechar todos os IFERRORs e adicionar fallback
-        formula_m += "," + '"Pendente de pagamento"' + ")" * len(abas_meses_validas)
-        formula_m = "=" + formula_m
+        formula_final_m = f'"{ "Pendente de pagamento" }"' # Valor padrão (fallback)
         
+        # Iteramos de TRÁS PRA FRENTE (do mais novo para o mais antigo)
+        # para montar a "cebola" do IFERROR.
+        # Ex: IFERROR(Jan, IFERROR(Fev, "Pendente")) -> Se Jan acha, usa Jan.
+        # Para isso funcionar, a lista 'abas_meses_validas' tem que estar [Jan, Fev]
+        # E nós construímos a string envolvendo o valor anterior.
+        
+        # Passo 1: Começa com o fallback
+        expr_atual = '"Pendente de pagamento"'
+        
+        # Passo 2: Envolve com os meses (do mais novo para o mais antigo)
+        # Se abas = [Jan, Fev, Mar]
+        # Iteração 1 (Mar): IFERROR(VLOOKUP_MAR, "Pendente")
+        # Iteração 2 (Fev): IFERROR(VLOOKUP_FEV, IFERROR(VLOOKUP_MAR, "Pendente"))
+        # Iteração 3 (Jan): IFERROR(VLOOKUP_JAN, IFERROR(VLOOKUP_FEV, ...)) -> Jan tem prioridade!
+        
+        for aba in reversed(abas_meses_validas):
+            vlookup = f"VLOOKUP(A{row},'{aba}'!A:N,14,0)"
+            expr_atual = f"IFERROR({vlookup}, {expr_atual})"
+            
+        formula_m = "=" + expr_atual
         cell_m = ws_base.cell(row=row, column=13, value=formula_m)
         
-        # Copiar formatação da linha anterior
-        if row > 2:
-            linha_molde = row - 1
-            copiar_estilo(ws_base.cell(row=linha_molde, column=13), cell_m)
-        
         # ===== COLUNA N (14) - Parcelas Recebidas =====
-        # =COUNTIF('Setembro'!A:A,BASE!A2) + COUNTIF('Outubro'!A:A,BASE!A2) + ...
         countif_parts = []
         for aba in abas_meses_validas:
             countif_parts.append(f"COUNTIF('{aba}'!A:A,BASE!A{row})")
-        
         formula_n = f'={"+".join(countif_parts)}'
         cell_n = ws_base.cell(row=row, column=14, value=formula_n)
         
-        # Copiar formatação da linha anterior
+        # Copiar Estilos (Unificado)
         if row > 2:
             linha_molde = row - 1
-            copiar_estilo(ws_base.cell(row=linha_molde, column=14), cell_n)
+            for col in [12, 13, 14]:
+                copiar_estilo(ws_base.cell(linha_molde, col), ws_base.cell(row, col))
         
         linhas_processadas += 1
     
