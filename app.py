@@ -1033,6 +1033,94 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         
     return linhas_processadas
 
+def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
+    """
+    Substitui a Macro VBA. Filtra a BASE por data e preenche colunas V, W e X na aba do mês.
+    
+    Args:
+        base_df: DataFrame da aba BASE (para filtragem rápida)
+        base_wb: Workbook do OpenPyxl (para escrita)
+        target_month_name: Nome da aba destino (ex: 'FEV.26')
+        data_inicio: Data datetime.date
+        data_fim: Data datetime.date
+    """
+    print(f"🔄 Iniciando processamento do ciclo: {data_inicio} até {data_fim}")
+    
+    # 1. Preparar Aba Destino
+    if target_month_name not in base_wb.sheetnames:
+        print(f"❌ Erro: Aba {target_month_name} não encontrada.")
+        return 0
+        
+    ws_destino = base_wb[target_month_name]
+    
+    # 2. Filtrar Dados na BASE (Usando Pandas - Muito mais rápido que VBA)
+    # Assumindo:
+    # Coluna A (Index 0) = CCB / ID
+    # Coluna H (Index 7) = Data Desembolso
+    
+    # Garantir que as colunas existem e converter para datetime para comparação
+    col_data_nome = base_df.columns[7] # Pega o nome da coluna H
+    col_id_nome = base_df.columns[0]   # Pega o nome da coluna A
+    
+    # Converte inputs para datetime do pandas para bater com o DF
+    inicio_pd = pd.to_datetime(data_inicio)
+    fim_pd = pd.to_datetime(data_fim)
+    
+    # Aplica o Filtro
+    mask = (base_df[col_data_nome] >= inicio_pd) & (base_df[col_data_nome] <= fim_pd)
+    dados_filtrados = base_df[mask].copy()
+    
+    qtd_encontrada = len(dados_filtrados)
+    print(f"🔍 Encontrados {qtd_encontrada} registros no período.")
+    
+    if dados_filtrados.empty:
+        return 0
+
+    # 3. Limpar Área Antiga (Colunas V, W, X da linha 2 até o fim)
+    # VBA limpava T:U, mas aqui o alvo é V:X. Limpeza é crucial para não sobrar lixo.
+    max_row = ws_destino.max_row
+    if max_row >= 2:
+        # Limpa de V(22) até X(24)
+        for row in ws_destino.iter_rows(min_row=2, max_row=max_row, min_col=22, max_col=24):
+            for cell in row:
+                cell.value = None
+    
+    # 4. Escrever Dados e Fórmulas
+    linha_atual = 2
+    
+    for index, row in dados_filtrados.iterrows():
+        # --- Coluna V (22): ID/CCB (Vem da Coluna A da Base) ---
+        valor_id = row[col_id_nome]
+        ws_destino.cell(row=linha_atual, column=22).value = valor_id
+        
+        # --- Coluna W (23): Data Desembolso (Vem da Coluna H da Base) ---
+        valor_data = row[col_data_nome]
+        # Se vier como Timestamp, converter para data curta do Excel
+        if isinstance(valor_data, pd.Timestamp):
+            valor_data = valor_data.date()
+        ws_destino.cell(row=linha_atual, column=23).value = valor_data
+        
+        # --- Coluna X (24): Fórmula de Validação ---
+        # Fórmula pedida: =IF(ISNUMBER(MATCH(V2;Q:Q;0));"Sim";"Não")
+        # Ajuste para OpenPyxl (Inglês + Vírgula): IF(ISNUMBER(MATCH(V2,Q:Q,0)),"Sim","Não")
+        
+        # Nota: O Excel traduzirá as vírgulas para ponto-e-vírgula e Inglês para PT-BR automaticamente ao abrir.
+        formula_validacao = f'=IF(ISNUMBER(MATCH(V{linha_atual},Q:Q,0)),"Sim","Não")'
+        
+        ws_destino.cell(row=linha_atual, column=24).value = formula_validacao
+        
+        # Copiar estilo simples da linha anterior (Opcional, se precisar de bordas)
+        if linha_atual > 2:
+             try:
+                 copiar_estilo(ws_destino.cell(linha_atual-1, 22), ws_destino.cell(linha_atual, 22))
+                 copiar_estilo(ws_destino.cell(linha_atual-1, 23), ws_destino.cell(linha_atual, 23))
+                 copiar_estilo(ws_destino.cell(linha_atual-1, 24), ws_destino.cell(linha_atual, 24))
+             except: pass
+             
+        linha_atual += 1
+        
+    return qtd_encontrada
+
 
 def aplicar_formulas_estaticas(ws_base, linha_inicio):
     """
@@ -1236,6 +1324,8 @@ st.markdown("---")
 # ========================================
 
 st.sidebar.header("⚙️ Configurações")
+
+# --- 1. MÊS E ANO ---
 st.sidebar.markdown("### 📅 Período de Análise")
 
 # Selectbox para Mês
@@ -1260,6 +1350,40 @@ target_month = f"{mes_selecionado}.{ano_selecionado}"
 
 # Exibir o período selecionado
 st.sidebar.success(f"**Período Selecionado:** {target_month}")
+st.sidebar.markdown("---")
+
+# --- 2. CICLO DE VALIDAÇÃO (NOVO) ---
+st.sidebar.markdown("### 🔄 Ciclo de Validação")
+st.sidebar.caption("Defina o intervalo para filtrar os dados de desembolso (Colunas V, W, X).")
+
+col_ini, col_fim = st.sidebar.columns(2)
+
+with col_ini:
+    # value=None força o usuário a escolher, evitando datas erradas por padrão
+    data_inicio_ciclo = st.date_input(
+        "Início",
+        value=None,
+        format="DD/MM/YYYY",
+        key="data_inicio_input"
+    )
+
+with col_fim:
+    data_fim_ciclo = st.date_input(
+        "Fim",
+        value=None,
+        format="DD/MM/YYYY",
+        key="data_fim_input"
+    )
+
+# Validação Visual no Sidebar
+if data_inicio_ciclo and data_fim_ciclo:
+    if data_inicio_ciclo > data_fim_ciclo:
+        st.sidebar.error("⚠️ Erro: Data de Início maior que Fim!")
+    else:
+        st.sidebar.success(f"**Ciclo:** {data_inicio_ciclo.strftime('%d/%m')} até {data_fim_ciclo.strftime('%d/%m')}")
+else:
+    st.sidebar.warning("⚠️ Selecione as datas do ciclo para processar a validação.")
+
 st.sidebar.markdown("---")
 
 # ========================================
@@ -1522,6 +1646,51 @@ if processar and arquivos_prontos:
                 st.text(f"ℹ️ {resultado_base['linhas_formulas_aplicadas']} linhas atualizadas")
             
             progress_bar.progress(80)
+
+            # ==================================================
+            # ETAPA 5.3.1: Processar Ciclo de Validação (Colunas V, W, X)
+            # ==================================================
+            status_container.info("🔄 Verificando Ciclo de Validação...")
+            
+            # Verifica se o usuário preencheu as datas no Sidebar
+            if data_inicio_ciclo and data_fim_ciclo:
+                
+                # --- O PULO DO GATO: Atualizar o DataFrame com os dados novos ---
+                # Como fizemos append no Excel (base_wb), o Pandas antigo não sabe disso.
+                # Vamos converter o workbook atualizado em DataFrame rapidinho.
+                with log_area:
+                    st.text("🔄 Recarregando dados em memória para incluir novos registros...")
+                
+                # Salva o estado atual do Excel na memória RAM
+                buffer_temp = BytesIO()
+                base_wb.save(buffer_temp)
+                buffer_temp.seek(0)
+                
+                # Lê de volta para o Pandas (Agora base_df contém as linhas novas!)
+                base_df_atualizado = pd.read_excel(buffer_temp, sheet_name="BASE")
+                
+                with log_area:
+                    st.text(f"🔄 Filtrando desembolsos entre {data_inicio_ciclo.strftime('%d/%m')} e {data_fim_ciclo.strftime('%d/%m')}...")
+                
+                # Chama a função nova passando o DF ATUALIZADO
+                qtd_validacao = processar_ciclo_validacao(
+                    base_df_atualizado, # <--- Usamos a variável nova aqui!
+                    base_wb,            
+                    target_month,       
+                    data_inicio_ciclo,  
+                    data_fim_ciclo      
+                )
+                
+                with log_area:
+                    if qtd_validacao > 0:
+                        st.text(f"✅ Validação concluída: {qtd_validacao} linhas inseridas (V, W, X)")
+                    else:
+                        st.text("⚠️ Nenhum registro encontrado neste período de datas.")
+            else:
+                with log_area:
+                    st.warning("⚠️ Etapa de Validação (V, W, X) ignorada: Datas não definidas no menu.")
+
+            progress_bar.progress(83)
             
             # ==================================================
             # ETAPA 5.4: Atualizar aba RESUMO (Mês Faturamento)
