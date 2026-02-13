@@ -924,16 +924,22 @@ def inserir_coluna_mes(ws_base, target_month, colunas_meses):
 def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
     """
     Aplica fórmulas dinâmicas na BASE.
-    VERSÃO ROBUSTA:
-    1. Busca abas por padrão de nome (MMM.YY) e não pelo header.
-    2. Identifica dinamicamente a coluna de data em cada aba (resolve o problema 11 vs 14).
-    3. Cria IFERROR priorizando o primeiro pagamento encontrado.
+    VERSÃO DEBUG: Mais flexível com nomes de abas e com logs detalhados.
     """
-    ultima_linha = encontrar_ultima_linha(ws_base)
+    # Força o recálculo da última linha real (ignorando formatação vazia)
+    ultima_linha = ws_base.max_row
+    while ultima_linha > 1 and ws_base.cell(row=ultima_linha, column=1).value is None:
+        ultima_linha -= 1
+        
+    print(f"🔍 DEBUG: Última linha com dados identificada na BASE: {ultima_linha}")
+
+    if ultima_linha < 2:
+        print("⚠️ AVISO: A planilha BASE parece vazia (apenas cabeçalho?). Nada a processar.")
+        return 0
+
     linhas_processadas = 0
     
-    # --- 1. IDENTIFICAÇÃO INTELIGENTE DE ABAS ---
-    # Mapeamento de meses para ordenação
+    # --- 1. IDENTIFICAÇÃO DE ABAS (FLEXÍVEL) ---
     meses_map = {
         'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
         'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
@@ -941,47 +947,54 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
     
     abas_cronologicas = []
     
-    # Regex para capturar abas no formato MMM.YY (ex: SET.25, JAN.26)
-    padrao_aba = re.compile(r'^([A-Z]{3})\.(\d{2})$', re.IGNORECASE)
+    # Regex flexível: Aceita "JAN.26", "JAN 26", "JAN-26", " JAN.26 "
+    # Procura 3 letras + separador opcional + 2 dígitos
+    padrao_aba = re.compile(r'([A-Z]{3})[\.\-\s]?(\d{2})', re.IGNORECASE)
     
+    print(f"🔍 DEBUG: Verificando abas disponíveis: {base_wb.sheetnames}")
+
     for sheet_name in base_wb.sheetnames:
-        match = padrao_aba.match(sheet_name)
+        # Limpa espaços antes/depois
+        nome_limpo = sheet_name.strip()
+        match = padrao_aba.search(nome_limpo)
+        
         if match:
             mes_str, ano_str = match.groups()
             mes_num = meses_map.get(mes_str.upper())
             
             if mes_num:
-                # Criar objeto data para ordenar corretamente (Set/25 < Jan/26)
-                data_ordem = datetime(int("20" + ano_str), mes_num, 1)
-                abas_cronologicas.append({
-                    'nome': sheet_name,
-                    'data': data_ordem
-                })
-    
+                try:
+                    data_ordem = datetime(int("20" + ano_str), mes_num, 1)
+                    abas_cronologicas.append({
+                        'nome': sheet_name, # Usa o nome original para referência
+                        'data': data_ordem
+                    })
+                except Exception as e:
+                    print(f"⚠️ Erro ao processar data da aba {sheet_name}: {e}")
+
     # Ordenar do mais antigo para o mais novo
     abas_cronologicas.sort(key=lambda x: x['data'])
     
     if not abas_cronologicas:
-        print("⚠️ AVISO: Nenhuma aba de mês (padrão MMM.YY) encontrada.")
+        print("❌ ERRO CRÍTICO: Nenhuma aba de mês foi identificada. Verifique os nomes das abas!")
+        print("   Esperado algo como: 'JAN.26', 'FEV-26', etc.")
         return 0
 
-    print(f"✅ Abas identificadas para fórmula: {[a['nome'] for a in abas_cronologicas]}")
+    print(f"✅ Abas VÁLIDAS identificadas (Ordem Cronológica): {[a['nome'] for a in abas_cronologicas]}")
 
     # --- 2. MAPEAMENTO DINÂMICO DE COLUNAS ---
-    # Para cada aba, descobre qual coluna tem a "Data de pagmt" (Header)
-    # Evita erro de usar coluna 14 em aba que só vai até a 11
     config_abas = []
     for aba_info in abas_cronologicas:
         nome_aba = aba_info['nome']
         ws_mes = base_wb[nome_aba]
         
-        # Procura o header na linha 1
-        col_idx_encontrado = 14 # Fallback padrão
+        col_idx_encontrado = 14 # Fallback (Coluna N)
         col_letra = 'N'
         
-        for col in range(1, 20): # Varre as primeiras 20 colunas
+        # Procura onde está "Data de pagmt" na linha 1 da aba do mês
+        for col in range(1, 20): 
             valor = ws_mes.cell(row=1, column=col).value
-            if valor and "Data de pagmt" in str(valor): # Busca parcial
+            if valor and "Data de pagmt" in str(valor):
                 col_idx_encontrado = col
                 col_letra = get_column_letter(col)
                 break
@@ -993,37 +1006,31 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         })
 
     # --- 3. APLICAÇÃO DAS FÓRMULAS ---
+    print(f"🚀 Iniciando preenchimento das linhas 2 até {ultima_linha}...")
+    
     for row in range(2, ultima_linha + 1):
         
         # ===== COLUNA L (12) - Parcela Paga? =====
-        # Simples OR check em todas as abas
         vlookup_parts = []
         for cfg in config_abas:
             aba = cfg['nome']
+            # NOT(ISERROR(VLOOKUP(A{row};'ABA'!A:A;1;0)))
             vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row};'{aba}'!A:A;1;0)))")
         
         formula_l = f'=IF(OR({";".join(vlookup_parts)});"Sim";"Não")'
         ws_base.cell(row=row, column=12, value=formula_l)
 
-        # ===== COLUNA M (13) - Data Pagamento (A CORREÇÃO PRINCIPAL) =====
-        # Constrói o IFERROR aninhado.
-        # Estratégia: IFERROR(Antigo, IFERROR(Novo, "Pendente"))
-        # Isso garante que se o Antigo achar, ele ganha.
-        
-        # Começamos de trás para frente (Do mais NOVO para o mais ANTIGO)
-        # para que o mês mais ANTIGO fique na camada mais externa da fórmula.
-        
+        # ===== COLUNA M (13) - Data Pagamento (Cebola IFERROR) =====
         formula_m_atual = '"Pendente de pagamento"'
         
+        # Itera de trás pra frente (Do mais novo para o mais antigo)
         for cfg in reversed(config_abas):
             aba = cfg['nome']
             col_idx = cfg['col_idx']
-            col_letra = cfg['col_letra'] # Ex: 'K', 'L', 'N'
+            col_letra = cfg['col_letra']
             
-            # Monta o VLOOKUP específico dessa aba com a coluna certa
+            # VLOOKUP(A2; 'ABA'!A:N; 14; 0)
             vlookup = f"VLOOKUP(A{row};'{aba}'!A:{col_letra};{col_idx};0)"
-            
-            # Envelopa com IFERROR
             formula_m_atual = f"IFERROR({vlookup}; {formula_m_atual})"
             
         ws_base.cell(row=row, column=13, value="=" + formula_m_atual)
@@ -1037,14 +1044,17 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         formula_n = f'={"+".join(countif_parts)}'
         ws_base.cell(row=row, column=14, value=formula_n)
         
-        # Copiar Estilos (Unificado)
+        # Copiar Estilos (simples)
         if row > 2:
             linha_molde = row - 1
             for col in [12, 13, 14]:
-                copiar_estilo(ws_base.cell(linha_molde, col), ws_base.cell(row, col))
+                try:
+                    copiar_estilo(ws_base.cell(linha_molde, col), ws_base.cell(row, col))
+                except: pass
         
         linhas_processadas += 1
     
+    print(f"✅ Finalizado! {linhas_processadas} linhas atualizadas com fórmulas.")
     return linhas_processadas
 
 
