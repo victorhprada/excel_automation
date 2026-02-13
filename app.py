@@ -924,74 +924,56 @@ def inserir_coluna_mes(ws_base, target_month, colunas_meses):
 def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
     """
     Aplica fórmulas dinâmicas na BASE.
-    VERSÃO DEBUG: Mais flexível com nomes de abas e com logs detalhados.
+    CORREÇÃO: Usa separador ',' (padrão Americano) obrigatório para OpenPyxl.
     """
-    # Força o recálculo da última linha real (ignorando formatação vazia)
+    # Recalcula última linha real
     ultima_linha = ws_base.max_row
     while ultima_linha > 1 and ws_base.cell(row=ultima_linha, column=1).value is None:
         ultima_linha -= 1
-        
-    print(f"🔍 DEBUG: Última linha com dados identificada na BASE: {ultima_linha}")
 
     if ultima_linha < 2:
-        print("⚠️ AVISO: A planilha BASE parece vazia (apenas cabeçalho?). Nada a processar.")
         return 0
 
     linhas_processadas = 0
     
-    # --- 1. IDENTIFICAÇÃO DE ABAS (FLEXÍVEL) ---
+    # --- 1. IDENTIFICAÇÃO DE ABAS ---
     meses_map = {
         'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
         'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
     }
     
     abas_cronologicas = []
-    
-    # Regex flexível: Aceita "JAN.26", "JAN 26", "JAN-26", " JAN.26 "
-    # Procura 3 letras + separador opcional + 2 dígitos
+    # Regex flexível para nomes das abas
     padrao_aba = re.compile(r'([A-Z]{3})[\.\-\s]?(\d{2})', re.IGNORECASE)
     
-    print(f"🔍 DEBUG: Verificando abas disponíveis: {base_wb.sheetnames}")
-
     for sheet_name in base_wb.sheetnames:
-        # Limpa espaços antes/depois
         nome_limpo = sheet_name.strip()
         match = padrao_aba.search(nome_limpo)
-        
         if match:
             mes_str, ano_str = match.groups()
             mes_num = meses_map.get(mes_str.upper())
-            
             if mes_num:
                 try:
                     data_ordem = datetime(int("20" + ano_str), mes_num, 1)
-                    abas_cronologicas.append({
-                        'nome': sheet_name, # Usa o nome original para referência
-                        'data': data_ordem
-                    })
-                except Exception as e:
-                    print(f"⚠️ Erro ao processar data da aba {sheet_name}: {e}")
+                    abas_cronologicas.append({'nome': sheet_name, 'data': data_ordem})
+                except: pass
 
-    # Ordenar do mais antigo para o mais novo
+    # Ordenar cronologicamente
     abas_cronologicas.sort(key=lambda x: x['data'])
     
     if not abas_cronologicas:
-        print("❌ ERRO CRÍTICO: Nenhuma aba de mês foi identificada. Verifique os nomes das abas!")
-        print("   Esperado algo como: 'JAN.26', 'FEV-26', etc.")
         return 0
 
-    print(f"✅ Abas VÁLIDAS identificadas (Ordem Cronológica): {[a['nome'] for a in abas_cronologicas]}")
-
-    # --- 2. MAPEAMENTO DINÂMICO DE COLUNAS ---
+    # --- 2. MAPEAMENTO DE COLUNAS ---
     config_abas = []
     for aba_info in abas_cronologicas:
         nome_aba = aba_info['nome']
         ws_mes = base_wb[nome_aba]
         
-        col_idx_encontrado = 14 # Fallback (Coluna N)
+        col_idx_encontrado = 14 # Fallback
         col_letra = 'N'
         
-        # Procura onde está "Data de pagmt" na linha 1 da aba do mês
+        # Procura header na linha 1
         for col in range(1, 20): 
             valor = ws_mes.cell(row=1, column=col).value
             if valor and "Data de pagmt" in str(valor):
@@ -1005,46 +987,49 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
             'col_letra': col_letra
         })
 
-    # --- 3. APLICAÇÃO DAS FÓRMULAS ---
-    print(f"🚀 Iniciando preenchimento das linhas 2 até {ultima_linha}...")
-    
+    # --- 3. APLICAÇÃO DAS FÓRMULAS (COM VÍRGULAS) ---
     for row in range(2, ultima_linha + 1):
         
         # ===== COLUNA L (12) - Parcela Paga? =====
+        # Sintaxe: IF(OR(cond1, cond2), "Sim", "Não")
         vlookup_parts = []
         for cfg in config_abas:
             aba = cfg['nome']
-            # NOT(ISERROR(VLOOKUP(A{row};'ABA'!A:A;1;0)))
-            vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row};'{aba}'!A:A;1;0)))")
+            # Atenção: USAR VÍRGULA , E NÃO PONTO-E-VÍRGULA ;
+            vlookup_parts.append(f"NOT(ISERROR(VLOOKUP(A{row},'{aba}'!A:A,1,0)))")
         
-        formula_l = f'=IF(OR({";".join(vlookup_parts)});"Sim";"Não")'
+        # Junta com vírgula
+        formula_l = f'=IF(OR({",".join(vlookup_parts)}),"Sim","Não")'
         ws_base.cell(row=row, column=12, value=formula_l)
 
         # ===== COLUNA M (13) - Data Pagamento (Cebola IFERROR) =====
+        # Sintaxe: IFERROR(valor, valor_se_erro)
         formula_m_atual = '"Pendente de pagamento"'
         
-        # Itera de trás pra frente (Do mais novo para o mais antigo)
+        # De trás pra frente (Do mais novo para o mais antigo)
         for cfg in reversed(config_abas):
             aba = cfg['nome']
             col_idx = cfg['col_idx']
             col_letra = cfg['col_letra']
             
-            # VLOOKUP(A2; 'ABA'!A:N; 14; 0)
-            vlookup = f"VLOOKUP(A{row};'{aba}'!A:{col_letra};{col_idx};0)"
-            formula_m_atual = f"IFERROR({vlookup}; {formula_m_atual})"
+            # Atenção: USAR VÍRGULA
+            vlookup = f"VLOOKUP(A{row},'{aba}'!A:{col_letra},{col_idx},0)"
+            formula_m_atual = f"IFERROR({vlookup}, {formula_m_atual})"
             
         ws_base.cell(row=row, column=13, value="=" + formula_m_atual)
 
         # ===== COLUNA N (14) - Parcelas Recebidas =====
+        # Sintaxe: COUNTIF(range, criteria)
         countif_parts = []
         for cfg in config_abas:
             aba = cfg['nome']
-            countif_parts.append(f"COUNTIF('{aba}'!A:A;BASE!A{row})")
+            # Atenção: USAR VÍRGULA
+            countif_parts.append(f"COUNTIF('{aba}'!A:A,BASE!A{row})")
             
         formula_n = f'={"+".join(countif_parts)}'
         ws_base.cell(row=row, column=14, value=formula_n)
         
-        # Copiar Estilos (simples)
+        # Copiar Estilos
         if row > 2:
             linha_molde = row - 1
             for col in [12, 13, 14]:
@@ -1054,7 +1039,6 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         
         linhas_processadas += 1
     
-    print(f"✅ Finalizado! {linhas_processadas} linhas atualizadas com fórmulas.")
     return linhas_processadas
 
 
