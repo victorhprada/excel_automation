@@ -923,9 +923,9 @@ def inserir_coluna_mes(ws_base, target_month, colunas_meses):
 
 def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
     """
-    Aplica fórmulas na BASE usando a estratégia de APPEND (Cirúrgica) para L e M.
+    Aplica fórmulas na BASE usando a estratégia de APPEND (Cirúrgica) para L, M e N.
     """
-    # 1. Preparação Básica (Última linha e Mês Alvo)
+    # 1. Preparação Básica
     ultima_linha = ws_base.max_row
     while ultima_linha > 1 and ws_base.cell(row=ultima_linha, column=1).value is None:
         ultima_linha -= 1
@@ -934,45 +934,33 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         return 0
 
     target_month_sheet = colunas_meses[-1]['nome']
-    print(f"DEBUG: Iniciando atualização cirúrgica para o mês: {target_month_sheet}")
+    print(f"DEBUG: Atualizando fórmulas (L, M, N) para incluir aba: {target_month_sheet}")
 
     # ==============================================================================
-    # 🩹 CIRURGIA NA COLUNA L (Parcela Paga? - Sim/Não)
+    # 🩹 1. PREPARAR TEMPLATE DA COLUNA L (Parcela Paga? - Sim/Não)
     # ==============================================================================
-    cell_l2 = ws_base.cell(row=2, column=12) # Coluna L
+    cell_l2 = ws_base.cell(row=2, column=12)
     formula_l_base = str(cell_l2.value) if cell_l2.value else ""
-    
-    # Padroniza para vírgula (OpenPyxl usa padrão US)
-    formula_l_limpa = formula_l_base.replace(";", ",")
+    formula_l_limpa = formula_l_base.replace(";", ",") # Padroniza para vírgula
     
     nova_formula_l = formula_l_limpa
     
-    # Se a fórmula estiver vazia, cria do zero
     if not formula_l_limpa.startswith("="):
-         # Cria base inicial: =IF(OR(Condição),"Sim","Não")
+         # Cria do zero se vazia
          nova_formula_l = f'=IF(OR(NOT(ISERROR(VLOOKUP(A2,\'{target_month_sheet}\'!A:A,1,0)))),"Sim","Não")'
-    
-    # Se já existe, faz o append (se o mês ainda não estiver lá)
     elif target_month_sheet not in formula_l_limpa:
-        # O marcador é o fechamento do OR seguido da virgula e "Sim"
-        # Procuramos: ),"Sim"
+        # Procura o fechamento: ),"Sim"
         marcador_l = '),"Sim"'
-        
         if marcador_l in formula_l_limpa:
-            # Novo pedaço: ,NOT(ISERROR(VLOOKUP(A2,'MES'!A:A,1,0)))
-            # Note a vírgula no início para separar da condição anterior
+            # Insere: ,NOT(ISERROR(VLOOKUP(A2,'MES'!A:A,1,0)))
             novo_trecho_l = f",NOT(ISERROR(VLOOKUP(A2,'{target_month_sheet}'!A:A,1,0)))"
-            
-            # Insere ANTES do marcador
             nova_formula_l = formula_l_limpa.replace(marcador_l, novo_trecho_l + marcador_l)
-            print("✅ Coluna L: Fórmula atualizada com sucesso.")
-        else:
-            print("⚠️ Coluna L: Marcador ),\"Sim\" não encontrado. Fórmula mantida.")
-    
+            print("✅ Coluna L: Fórmula atualizada.")
+
     # ==============================================================================
-    # 🩹 CIRURGIA NA COLUNA M (Data Pagamento - IFERROR Aninhado)
+    # 🩹 2. PREPARAR TEMPLATE DA COLUNA M (Data Pagamento - IFERROR)
     # ==============================================================================
-    cell_m2 = ws_base.cell(row=2, column=13) # Coluna M
+    cell_m2 = ws_base.cell(row=2, column=13)
     formula_m_base = str(cell_m2.value) if cell_m2.value else ""
     formula_m_limpa = formula_m_base.replace(";", ",")
     
@@ -980,33 +968,47 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
 
     if not formula_m_limpa.startswith("="):
         nova_formula_m = '="Pendente de pagamento"'
-
+    
     if target_month_sheet not in formula_m_limpa:
         marcador_m = '"Pendente de pagamento"'
         if marcador_m in formula_m_limpa:
-            # IFERROR(VLOOKUP(A2,'SHEET'!A:N,14,0), ...
-            # Aqui forçamos Coluna 14 porque sabemos que é aba nova
+            # Insere: IFERROR(VLOOKUP(A2,'MES'!A:N,14,0), ...
             trecho_novo_m = f"IFERROR(VLOOKUP(A2,'{target_month_sheet}'!A:N,14,0), "
-            
-            # Substitui e fecha parêntese no final
             nova_formula_m = formula_m_limpa.replace(marcador_m, trecho_novo_m + marcador_m) + ")"
-            print("✅ Coluna M: Fórmula atualizada com sucesso.")
+            print("✅ Coluna M: Fórmula atualizada.")
 
     # ==============================================================================
-    # 🚀 APLICAÇÃO EM MASSA (Arrastar para baixo)
+    # 🩹 3. PREPARAR TEMPLATE DA COLUNA N (Soma Countif)
+    # ==============================================================================
+    cell_n2 = ws_base.cell(row=2, column=14)
+    formula_n_base = str(cell_n2.value) if cell_n2.value else ""
+    formula_n_limpa = formula_n_base.replace(";", ",") # Vírgula sempre!
+    
+    nova_formula_n = formula_n_limpa
+    
+    if not formula_n_limpa.startswith("="):
+        # Se vazia, cria a primeira: =COUNTIF('FEV.26'!A:A,BASE!A2)
+        nova_formula_n = f"=COUNTIF('{target_month_sheet}'!A:A,BASE!A2)"
+    
+    elif target_month_sheet not in formula_n_limpa:
+        # Se já existe, é só adicionar no final: +COUNTIF(...)
+        # Nota: Usamos BASE!A2 como referência template
+        novo_trecho_n = f"+COUNTIF('{target_month_sheet}'!A:A,BASE!A2)"
+        nova_formula_n += novo_trecho_n
+        print("✅ Coluna N: Fórmula atualizada.")
+
+    # ==============================================================================
+    # 🚀 APLICAÇÃO EM MASSA (Arrastar Templates)
     # ==============================================================================
     linhas_processadas = 0
     
-    # Para Coluna N, mantemos a lógica de soma simples (recriar é seguro e rápido)
-    # COUNTIF + COUNTIF...
-    # Se quiser fazer append na N também, me avise. Por enquanto vou deixar recriando
-    # para não complicar, já que é soma simples.
-    
-    # Mas para L e M, usamos as templates cirúrgicas
     for row in range(2, ultima_linha + 1):
         
+        # O segredo aqui é o REPLACE inteligente.
+        # Estamos usando as fórmulas da linha 2 (A2) como molde.
+        # Trocamos "A2" por "A{row}" (ex: A310) para aplicar na linha certa.
+        
         # --- COLUNA L ---
-        # Substitui A2 por A{row}
         f_l = nova_formula_l.replace("A2", f"A{row}")
         ws_base.cell(row=row, column=12, value=f_l)
         
@@ -1014,50 +1016,17 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         f_m = nova_formula_m.replace("A2", f"A{row}")
         ws_base.cell(row=row, column=13, value=f_m)
         
-        # --- COLUNA N (Recriando lógica simples de Soma) ---
-        # Se quiser manter simples, apenas adicionamos o novo countif na existente?
-        # Vamos manter a lógica segura de "Recriar N" baseada nas abas anteriores, 
-        # ou se preferir, podemos ler a N2 e fazer append de "+COUNTIF(...)".
-        # Vou deixar o código da N como estava na versão anterior (Recriar), 
-        # pois você não reclamou dela e soma é mais fácil de recriar do zero.
-        # ... (Se precisar alterar N, me avise) ...
+        # --- COLUNA N ---
+        # Substitui BASE!A2 por BASE!A{row}
+        # O replace simples funciona bem aqui
+        f_n = nova_formula_n.replace("A2", f"A{row}")
+        ws_base.cell(row=row, column=14, value=f_n)
 
         # Copiar Estilo (Visual apenas)
         if row > 2:
             try:
-                # Copia de L(12) e M(13) da linha anterior
-                copiar_estilo(ws_base.cell(row-1, 12), ws_base.cell(row, 12))
-                copiar_estilo(ws_base.cell(row-1, 13), ws_base.cell(row, 13))
-            except: pass
-            
-        linhas_processadas += 1
-        
-    return linhas_processadas
-    
-    for row in range(2, ultima_linha + 1):
-        # A template está com "A2". Precisamos mudar para "A{row}"
-        # Usamos regex ou replace simples, cuidando para não quebrar nomes de abas
-        
-        # Substitui A2 por A{row}, A3 por A{row}... 
-        # Como pegamos a template de M2, ela tem A2.
-        formula_linha = nova_formula_template.replace("A2", f"A{row}")
-        
-        # Escreve na Coluna M (13)
-        ws_base.cell(row=row, column=13, value=formula_linha)
-        
-        # Atualiza Coluna L (Sim/Não) e N (Contagem) com lógica similar ou mantendo a anterior
-        # (Aqui estou focando na M que era o problema principal)
-        
-        # Para L e N, podemos usar a lógica antiga simples de recriar, 
-        # pois elas não têm o problema de prioridade de data (apenas OR e SOMA)
-        
-        # ... (Manter código das colunas L e N da versão anterior se necessário, 
-        # ...  ou focar apenas na correção da M)
-
-        # Cópia de Estilo
-        if row > 2:
-            try:
-                copiar_estilo(ws_base.cell(row-1, 13), ws_base.cell(row, 13))
+                for col in [12, 13, 14]:
+                    copiar_estilo(ws_base.cell(row-1, col), ws_base.cell(row, col))
             except: pass
             
         linhas_processadas += 1
