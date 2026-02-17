@@ -1045,7 +1045,7 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
     # ==============================================================================
     # ⚙️ CONFIGURAÇÃO: QUAL A LETRA DA COLUNA DE DATA NA BASE?
     # ==============================================================================
-    COLUNA_DATA_LETRA = 'H'  # <--- ALTERE AQUI SE FOR 'H' ou 'D'
+    COLUNA_DATA_LETRA = 'F'  # <--- ALTERE AQUI SE FOR 'H' ou 'D'
     # ==============================================================================
 
     st.markdown("#### 🕵️ Diagnóstico do Ciclo")
