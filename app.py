@@ -1685,6 +1685,25 @@ if processar and arquivos_prontos:
                 
                 # Lê de volta para o Pandas (Agora base_df contém as linhas novas!)
                 base_df_atualizado = pd.read_excel(buffer_temp, sheet_name="BASE")
+
+                # --- BLOCO DE DIAGNÓSTICO VISUAL ---
+                with log_area:
+                    st.markdown("---")
+                    st.markdown("**🕵️‍♂️ Raio-X das Últimas Linhas Carregadas:**")
+                    
+                    # Mostra quantas linhas tem no total
+                    st.text(f"Total de linhas no DataFrame: {len(base_df_atualizado)}")
+                    
+                    # Pega a coluna H (Índice 7) e mostra as últimas 5 linhas
+                    try:
+                        col_h_nome = base_df_atualizado.columns[7] # Coluna H
+                        ultimas_datas = base_df_atualizado[col_h_nome].tail(5)
+                        st.text(f"Coluna H ('{col_h_nome}') - Últimos valores:")
+                        st.write(ultimas_datas)
+                    except:
+                        st.error("Não consegui ler a Coluna H para o teste.")
+                    st.markdown("---")
+                # ----------------------------------------
                 
                 with log_area:
                     st.text(f"🔄 Filtrando desembolsos entre {data_inicio_ciclo.strftime('%d/%m')} e {data_fim_ciclo.strftime('%d/%m')}...")
