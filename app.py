@@ -15,6 +15,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 import re
 from datetime import datetime
+from openpyxl.utils import column_index_from_string
 
 # ========================================
 # Funções Auxiliares
@@ -1035,79 +1036,97 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
 
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
     """
-    Versão DEBUG: Resolve problemas de tipagem de data e mostra logs detalhados.
+    Versão FINAL: 
+    1. Usa COLUNA FIXA para a Data de Origem (Você define a letra).
+    2. Grava nos destinos V e W (Corrigindo o legado T/U).
+    3. Cria fórmula em X.
     """
-    import pandas as pd # Garantia
     
-    print(f"🔄 DEBUG: Iniciando processamento do ciclo: {data_inicio} até {data_fim}")
+    # ==============================================================================
+    # ⚙️ CONFIGURAÇÃO: QUAL A LETRA DA COLUNA DE DATA NA BASE?
+    # ==============================================================================
+    COLUNA_DATA_LETRA = 'H'  # <--- ALTERE AQUI SE FOR 'H' ou 'D'
+    # ==============================================================================
+
+    st.markdown("#### 🕵️ Diagnóstico do Ciclo")
     
     # 1. Preparar Aba Destino
     if target_month_name not in base_wb.sheetnames:
-        print(f"❌ Erro: Aba {target_month_name} não encontrada.")
+        st.error(f"❌ Erro: Aba {target_month_name} não encontrada.")
         return 0
-        
     ws_destino = base_wb[target_month_name]
     
-    # 2. Identificação de Colunas
-    # Coluna A (Index 0) = ID / CCB
-    # Coluna H (Index 7) = Data Desembolso
-    col_id_nome = base_df.columns[0]
-    col_data_nome = base_df.columns[7] 
-    
-    # --- CORREÇÃO CRÍTICA DE DATAS ---
-    # Converte a coluna do Excel para datetime forçado (ignora erros)
-    # dayfirst=True ajuda se o Excel estiver lendo DD/MM como MM/DD errado
-    base_df[col_data_nome] = pd.to_datetime(base_df[col_data_nome], errors='coerce', dayfirst=True)
-    
-    # Cria uma coluna temporária SÓ DE DATA (sem hora) para comparação
-    base_df['temp_data_comparacao'] = base_df[col_data_nome].dt.date
-    
-    # Logs de Diagnóstico (Vão aparecer no terminal)
-    print(f"--- DIAGNÓSTICO DE DATAS ---")
-    print(f"Coluna Data Usada: {col_data_nome}")
-    print(f"Exemplo Data Excel (Original): {base_df[col_data_nome].iloc[0]}")
-    print(f"Exemplo Data Excel (Convertida): {base_df['temp_data_comparacao'].iloc[0]}")
-    print(f"Data Input Inicio: {data_inicio} (Tipo: {type(data_inicio)})")
-    print(f"---------------------------")
-
-    # Aplica o Filtro usando a coluna normalizada
-    mask = (base_df['temp_data_comparacao'] >= data_inicio) & (base_df['temp_data_comparacao'] <= data_fim)
-    dados_filtrados = base_df[mask].copy()
-    
-    qtd_encontrada = len(dados_filtrados)
-    print(f"🔍 Resultado do Filtro: {qtd_encontrada} linhas encontradas.")
-    
-    if dados_filtrados.empty:
-        print("⚠️ AVISO: Nenhuma linha passou no filtro de datas. Verifique se o intervalo está correto.")
+    # 2. Localizar as Colunas de Origem (Baseadas na Letra)
+    try:
+        # Converte letra 'F' para índice numérico (F -> 6). 
+        # Pandas usa base 0, então subtraímos 1 (F vira índice 5).
+        idx_data = column_index_from_string(COLUNA_DATA_LETRA) - 1
+        
+        # Pega o nome do cabeçalho dessa coluna para usar no Pandas
+        nome_coluna_data = base_df.columns[idx_data]
+        nome_coluna_id = base_df.columns[0] # Assume Coluna A (ID/CCB)
+        
+        st.info(f"📍 Lendo datas da Coluna **{COLUNA_DATA_LETRA}** (Cabeçalho: '{nome_coluna_data}')")
+        
+    except IndexError:
+        st.error(f"❌ Erro: A coluna {COLUNA_DATA_LETRA} não existe na planilha BASE.")
         return 0
 
-    # 3. Limpar Área Antiga
+    # 3. Tratamento e Filtro
+    try:
+        # Força conversão para data (ignora erros de texto/sujeira)
+        # dayfirst=True ajuda o Excel brasileiro (DD/MM/AAAA)
+        coluna_datas_limpas = pd.to_datetime(base_df[nome_coluna_data], errors='coerce', dayfirst=True).dt.date
+        
+        # Mostra exemplo para você conferir
+        exemplo = coluna_datas_limpas.dropna().iloc[0] if not coluna_datas_limpas.dropna().empty else "Vazio"
+        st.caption(f"🔎 Exemplo de data lida: {exemplo}")
+        
+        # Aplica o Filtro
+        mask = (coluna_datas_limpas >= data_inicio) & (coluna_datas_limpas <= data_fim)
+        dados_filtrados = base_df[mask].copy()
+        
+        qtd = len(dados_filtrados)
+        
+        if qtd == 0:
+            st.warning(f"⚠️ Nenhuma linha encontrada entre {data_inicio} e {data_fim}.")
+            return 0
+        else:
+            st.success(f"✅ Filtro OK! {qtd} registros encontrados.")
+
+    except Exception as e:
+        st.error(f"Erro ao processar datas: {e}")
+        return 0
+
+    # 4. Escrever Dados nos Destinos V (22), W (23) e X (24)
+    # Limpa área antiga (garantia para não misturar dados)
     max_row = ws_destino.max_row
     if max_row >= 2:
+        # Limpa V, W, X
         for row in ws_destino.iter_rows(min_row=2, max_row=max_row, min_col=22, max_col=24):
             for cell in row:
                 cell.value = None
     
-    # 4. Escrever Dados
+    # Loop de Escrita
     linha_atual = 2
-    
     for index, row in dados_filtrados.iterrows():
-        # Coluna V (22): ID
-        ws_destino.cell(row=linha_atual, column=22).value = row[col_id_nome]
         
-        # Coluna W (23): Data (Original com hora ou sem, conforme preferir)
-        # Aqui pegamos a data limpa convertida
-        val_data = row[col_data_nome]
-        if pd.notnull(val_data):
-            ws_destino.cell(row=linha_atual, column=23).value = val_data.date() # Escreve só a data no Excel
+        # --- DESTINO COLUNA V (22) ---
+        # Recebe o ID (Coluna A da Base)
+        ws_destino.cell(row=linha_atual, column=22).value = row[nome_coluna_id]
         
-        # Coluna X (24): Fórmula
-        # Atenção: Fórmula deve usar vírgulas , para biblioteca openpyxl (padrão US)
-        # O Excel traduz para ; ao abrir
-        formula_validacao = f'=IF(ISNUMBER(MATCH(V{linha_atual},Q:Q,0)),"Sim","Não")'
-        ws_destino.cell(row=linha_atual, column=24).value = formula_validacao
+        # --- DESTINO COLUNA W (23) ---
+        # Recebe a Data (Coluna 'F' da Base, limpa)
+        val_data = coluna_datas_limpas[index] # Pega a data já tratada
+        ws_destino.cell(row=linha_atual, column=23).value = val_data
         
-        # Copiar Estilos (simples)
+        # --- DESTINO COLUNA X (24) ---
+        # Fórmula de Validação
+        # Sintaxe OpenPyxl (Inglês + Vírgulas): =IF(ISNUMBER(MATCH(V2,Q:Q,0)),"Sim","Não")
+        formula = f'=IF(ISNUMBER(MATCH(V{linha_atual},Q:Q,0)),"Sim","Não")'
+        ws_destino.cell(row=linha_atual, column=24).value = formula
+        
+        # Copiar Estilos (Opcional, pega da linha anterior se existir)
         if linha_atual > 2:
              try:
                  copiar_estilo(ws_destino.cell(linha_atual-1, 22), ws_destino.cell(linha_atual, 22))
@@ -1117,7 +1136,7 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
 
         linha_atual += 1
         
-    return qtd_encontrada
+    return qtd
 
 
 def aplicar_formulas_estaticas(ws_base, linha_inicio):
