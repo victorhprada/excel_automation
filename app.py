@@ -1678,39 +1678,47 @@ if processar and arquivos_prontos:
                 with log_area:
                     st.text("🔄 Recarregando dados em memória para incluir novos registros...")
                 
-                # Salva o estado atual do Excel na memória RAM
-                buffer_temp = BytesIO()
-                base_wb.save(buffer_temp)
-                buffer_temp.seek(0)
+                # 1. Pega a aba BASE
+                ws_base_ativa = base_wb['BASE']
                 
-                # Lê de volta para o Pandas (Agora base_df contém as linhas novas!)
-                base_df_atualizado = pd.read_excel(buffer_temp, sheet_name="BASE")
+                # 2. Converte os dados da aba direto para DataFrame (Ignorando formatação)
+                # values_only=True pega o valor cru (ex: datas) instantaneamente
+                data = list(ws_base_ativa.values)
+                
+                if data:
+                    cols = data[0] # Primeira linha é o cabeçalho
+                    rows = data[1:] # O resto são dados
+                    base_df_atualizado = pd.DataFrame(rows, columns=cols)
+                else:
+                    base_df_atualizado = pd.DataFrame() # Vazio se der erro
 
-                # --- BLOCO DE DIAGNÓSTICO VISUAL ---
+                # --- NOVO RAIO-X (Para confirmarmos que funcionou) ---
                 with log_area:
                     st.markdown("---")
-                    st.markdown("**🕵️‍♂️ Raio-X das Últimas Linhas Carregadas:**")
-                    
-                    # Mostra quantas linhas tem no total
-                    st.text(f"Total de linhas no DataFrame: {len(base_df_atualizado)}")
-                    
-                    # Pega a coluna H (Índice 7) e mostra as últimas 5 linhas
+                    st.markdown("** Novo Raio-X (Leitura Direta):**")
                     try:
-                        col_h_nome = base_df_atualizado.columns[7] # Coluna H
-                        ultimas_datas = base_df_atualizado[col_h_nome].tail(5)
-                        st.text(f"Coluna H ('{col_h_nome}') - Últimos valores:")
+                        # Tenta pegar a coluna H (índice 7) ou procura pelo nome "Data"
+                        if "Data" in base_df_atualizado.columns:
+                            col_alvo = "Data"
+                        else:
+                            col_alvo = base_df_atualizado.columns[7]
+                            
+                        ultimas_datas = base_df_atualizado[col_alvo].tail(5)
+                        st.text(f"Coluna '{col_alvo}' - Últimos valores agora:")
                         st.write(ultimas_datas)
                     except:
-                        st.error("Não consegui ler a Coluna H para o teste.")
+                        st.error("Raio-X visual falhou, mas processo continua.")
                     st.markdown("---")
                 # ----------------------------------------
-                
+
                 with log_area:
-                    st.text(f"🔄 Filtrando desembolsos entre {data_inicio_ciclo.strftime('%d/%m')} e {data_fim_ciclo.strftime('%d/%m')}...")
+                    st.text(f"🔄 Filtrando entre {data_inicio_ciclo} e {data_fim_ciclo}...")
                 
-                # Chama a função nova passando o DF ATUALIZADO
+                # Chama a função de validação com o DF corrigido
+                # ATENÇÃO: Certifique-se que dentro da função 'processar_ciclo_validacao'
+                # a variável COLUNA_DATA_LETRA esteja como 'H' (já que sua coluna chama 'Data')
                 qtd_validacao = processar_ciclo_validacao(
-                    base_df_atualizado, # <--- Usamos a variável nova aqui!
+                    base_df_atualizado, 
                     base_wb,            
                     target_month,       
                     data_inicio_ciclo,  
@@ -1719,12 +1727,12 @@ if processar and arquivos_prontos:
                 
                 with log_area:
                     if qtd_validacao > 0:
-                        st.text(f"✅ Validação concluída: {qtd_validacao} linhas inseridas (V, W, X)")
+                        st.text(f"✅ Sucesso: {qtd_validacao} linhas validadas em V, W, X.")
                     else:
-                        st.text("⚠️ Nenhum registro encontrado neste período de datas.")
+                        st.warning("⚠️ Zero linhas encontradas. Verifique se as datas batem.")
             else:
                 with log_area:
-                    st.warning("⚠️ Etapa de Validação (V, W, X) ignorada: Datas não definidas no menu.")
+                    st.warning("⚠️ Etapa ignorada: Datas não definidas.")
 
             progress_bar.progress(83)
             
