@@ -1035,16 +1035,11 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
 
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
     """
-    Substitui a Macro VBA. Filtra a BASE por data e preenche colunas V, W e X na aba do mês.
-    
-    Args:
-        base_df: DataFrame da aba BASE (para filtragem rápida)
-        base_wb: Workbook do OpenPyxl (para escrita)
-        target_month_name: Nome da aba destino (ex: 'FEV.26')
-        data_inicio: Data datetime.date
-        data_fim: Data datetime.date
+    Versão DEBUG: Resolve problemas de tipagem de data e mostra logs detalhados.
     """
-    print(f"🔄 Iniciando processamento do ciclo: {data_inicio} até {data_fim}")
+    import pandas as pd # Garantia
+    
+    print(f"🔄 DEBUG: Iniciando processamento do ciclo: {data_inicio} até {data_fim}")
     
     # 1. Preparar Aba Destino
     if target_month_name not in base_wb.sheetnames:
@@ -1053,70 +1048,73 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
         
     ws_destino = base_wb[target_month_name]
     
-    # 2. Filtrar Dados na BASE (Usando Pandas - Muito mais rápido que VBA)
-    # Assumindo:
-    # Coluna A (Index 0) = CCB / ID
+    # 2. Identificação de Colunas
+    # Coluna A (Index 0) = ID / CCB
     # Coluna H (Index 7) = Data Desembolso
+    col_id_nome = base_df.columns[0]
+    col_data_nome = base_df.columns[7] 
     
-    # Garantir que as colunas existem e converter para datetime para comparação
-    col_data_nome = base_df.columns[7] # Pega o nome da coluna H
-    col_id_nome = base_df.columns[0]   # Pega o nome da coluna A
+    # --- CORREÇÃO CRÍTICA DE DATAS ---
+    # Converte a coluna do Excel para datetime forçado (ignora erros)
+    # dayfirst=True ajuda se o Excel estiver lendo DD/MM como MM/DD errado
+    base_df[col_data_nome] = pd.to_datetime(base_df[col_data_nome], errors='coerce', dayfirst=True)
     
-    # Converte inputs para datetime do pandas para bater com o DF
-    inicio_pd = pd.to_datetime(data_inicio)
-    fim_pd = pd.to_datetime(data_fim)
+    # Cria uma coluna temporária SÓ DE DATA (sem hora) para comparação
+    base_df['temp_data_comparacao'] = base_df[col_data_nome].dt.date
     
-    # Aplica o Filtro
-    mask = (base_df[col_data_nome] >= inicio_pd) & (base_df[col_data_nome] <= fim_pd)
+    # Logs de Diagnóstico (Vão aparecer no terminal)
+    print(f"--- DIAGNÓSTICO DE DATAS ---")
+    print(f"Coluna Data Usada: {col_data_nome}")
+    print(f"Exemplo Data Excel (Original): {base_df[col_data_nome].iloc[0]}")
+    print(f"Exemplo Data Excel (Convertida): {base_df['temp_data_comparacao'].iloc[0]}")
+    print(f"Data Input Inicio: {data_inicio} (Tipo: {type(data_inicio)})")
+    print(f"---------------------------")
+
+    # Aplica o Filtro usando a coluna normalizada
+    mask = (base_df['temp_data_comparacao'] >= data_inicio) & (base_df['temp_data_comparacao'] <= data_fim)
     dados_filtrados = base_df[mask].copy()
     
     qtd_encontrada = len(dados_filtrados)
-    print(f"🔍 Encontrados {qtd_encontrada} registros no período.")
+    print(f"🔍 Resultado do Filtro: {qtd_encontrada} linhas encontradas.")
     
     if dados_filtrados.empty:
+        print("⚠️ AVISO: Nenhuma linha passou no filtro de datas. Verifique se o intervalo está correto.")
         return 0
 
-    # 3. Limpar Área Antiga (Colunas V, W, X da linha 2 até o fim)
-    # VBA limpava T:U, mas aqui o alvo é V:X. Limpeza é crucial para não sobrar lixo.
+    # 3. Limpar Área Antiga
     max_row = ws_destino.max_row
     if max_row >= 2:
-        # Limpa de V(22) até X(24)
         for row in ws_destino.iter_rows(min_row=2, max_row=max_row, min_col=22, max_col=24):
             for cell in row:
                 cell.value = None
     
-    # 4. Escrever Dados e Fórmulas
+    # 4. Escrever Dados
     linha_atual = 2
     
     for index, row in dados_filtrados.iterrows():
-        # --- Coluna V (22): ID/CCB (Vem da Coluna A da Base) ---
-        valor_id = row[col_id_nome]
-        ws_destino.cell(row=linha_atual, column=22).value = valor_id
+        # Coluna V (22): ID
+        ws_destino.cell(row=linha_atual, column=22).value = row[col_id_nome]
         
-        # --- Coluna W (23): Data Desembolso (Vem da Coluna H da Base) ---
-        valor_data = row[col_data_nome]
-        # Se vier como Timestamp, converter para data curta do Excel
-        if isinstance(valor_data, pd.Timestamp):
-            valor_data = valor_data.date()
-        ws_destino.cell(row=linha_atual, column=23).value = valor_data
+        # Coluna W (23): Data (Original com hora ou sem, conforme preferir)
+        # Aqui pegamos a data limpa convertida
+        val_data = row[col_data_nome]
+        if pd.notnull(val_data):
+            ws_destino.cell(row=linha_atual, column=23).value = val_data.date() # Escreve só a data no Excel
         
-        # --- Coluna X (24): Fórmula de Validação ---
-        # Fórmula pedida: =IF(ISNUMBER(MATCH(V2;Q:Q;0));"Sim";"Não")
-        # Ajuste para OpenPyxl (Inglês + Vírgula): IF(ISNUMBER(MATCH(V2,Q:Q,0)),"Sim","Não")
-        
-        # Nota: O Excel traduzirá as vírgulas para ponto-e-vírgula e Inglês para PT-BR automaticamente ao abrir.
+        # Coluna X (24): Fórmula
+        # Atenção: Fórmula deve usar vírgulas , para biblioteca openpyxl (padrão US)
+        # O Excel traduz para ; ao abrir
         formula_validacao = f'=IF(ISNUMBER(MATCH(V{linha_atual},Q:Q,0)),"Sim","Não")'
-        
         ws_destino.cell(row=linha_atual, column=24).value = formula_validacao
         
-        # Copiar estilo simples da linha anterior (Opcional, se precisar de bordas)
+        # Copiar Estilos (simples)
         if linha_atual > 2:
              try:
                  copiar_estilo(ws_destino.cell(linha_atual-1, 22), ws_destino.cell(linha_atual, 22))
                  copiar_estilo(ws_destino.cell(linha_atual-1, 23), ws_destino.cell(linha_atual, 23))
                  copiar_estilo(ws_destino.cell(linha_atual-1, 24), ws_destino.cell(linha_atual, 24))
              except: pass
-             
+
         linha_atual += 1
         
     return qtd_encontrada
