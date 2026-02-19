@@ -1064,12 +1064,24 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
             
         ws_inad = base_wb['INADIMPLENTES']
         linha_destino = ws_inad.max_row + 1
+
+        # Filtramos o DataFrame 'dados_filtrados' para manter APENAS as linhas dos inadimplentes.
+        df_inadimplentes = dados_filtrados[dados_filtrados[nome_coluna_id].isin(ids_inadimplentes)]
+
+        # Garantia contra duplicatas (Pega apenas 1 registro por CCB)
+        df_inadimplentes = df_inadimplentes.drop_duplicates(subset=[nome_coluna_id])
         
-        for id_inad in ids_inadimplentes:
-            ws_inad.cell(row=linha_destino, column=1, value=id_inad)
+        for index, row in df_inadimplentes.iterrows():
+            # Pega os valores das 16 primeiras colunas (De 'A' até 'P')
+            valores_linha = row.iloc[0:16].tolist()
+            
+            # Cola cada valor na sua respectiva coluna na aba INADIMPLENTES
+            for col_idx, valor in enumerate(valores_linha, start=1):
+                ws_inad.cell(row=linha_destino, column=col_idx, value=valor)
+                
             linha_destino += 1
             
-        st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes identificados e copiados para a aba 'INADIMPLENTES'.")
+        st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados de A até P foram copiados com sucesso.")
     else:
         st.success("✅ Nenhum inadimplente encontrado neste ciclo.")
         
