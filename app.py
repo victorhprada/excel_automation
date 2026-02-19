@@ -1043,21 +1043,18 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
     # --- FUNÇÃO AUXILIAR PARA LIMPAR IDs ---
     def limpar_id(valor):
         if pd.isna(valor): return ""
-        # Transforma '12345.0' em '12345' para bater certinho com o Excel
         return str(valor).strip().replace('.0', '')
 
-    # 1. Pega todos os valores já existentes na Coluna Q da aba de destino (Q é a 17ª letra)
-    # Usamos set() porque a busca em conjuntos no Python é instantânea
+    # 1. Pega valores da Coluna Q
     valores_coluna_q = set()
     for celula in ws_destino['Q']:
         if celula.value is not None:
-            # Convertendo para string para garantir que a comparação não falhe por tipo de dado
             valores_coluna_q.add(limpar_id(celula.value))
             
-    # 2. Pega os IDs do DataFrame que acabaram de ser filtrados
+    # 2. Pega os IDs do DataFrame
     ids_novos = dados_filtrados[nome_coluna_id].dropna().apply(limpar_id)
     
-    # 3. Lógica do "Não": Quais IDs novos NÃO estão no conjunto da Coluna Q?
+    # 3. Lógica do "Não": Encontrar Inadimplentes
     ids_inadimplentes = []
     for id_val in ids_novos.unique():
         if id_val and id_val not in valores_coluna_q:
@@ -1070,19 +1067,20 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
             return base_wb
             
         ws_inad = base_wb['INADIMPLENTES']
+        ws_base = base_wb['BASE']
         linha_destino = ws_inad.max_row + 1
 
-        # Filtra o DataFrame original e remove duplicatas
-        # Criamos uma coluna temporária limpa só para fazer o filtro exato
+        # Roubar as fórmulas atualizadas da BASE (linha 2) para usar como molde
+        formula_molde_L = str(ws_base.cell(row=2, column=12).value or "")
+        formula_molde_M = str(ws_base.cell(row=2, column=13).value or "")
+
         df_temp = dados_filtrados.copy()
         df_temp['ID_LIMPO'] = df_temp[nome_coluna_id].apply(limpar_id)
-
         df_inadimplentes = df_temp[df_temp['ID_LIMPO'].isin(ids_inadimplentes)]
         df_inadimplentes = df_inadimplentes.drop_duplicates(subset=['ID_LIMPO'])
 
-        # --- FUNÇÃO AUXILIAR PARA GARANTIR CÁLCULOS SEGUROS ---
+        # --- FUNÇÃO AUXILIAR PARA CÁLCULOS ---
         def extrair_numero(val):
-            """Garante que valores com vírgula ou fórmulas quebrem o cálculo."""
             if pd.isna(val) or str(val).strip().startswith('='): return 0.0
             if isinstance(val, (int, float)): return float(val)
             val_str = str(val).replace('.', '').replace(',', '.')
@@ -1092,71 +1090,67 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
         for index, row in df_inadimplentes.iterrows():
             valores_linha = row.iloc[0:16].tolist()
             
-            # =========================================================
-            # 1. RECALCULANDO FÓRMULAS PARA SALVAR "FOTOGRAFIA"
-            # Índices: D=3, E=4, F=5, I=8, N=13
-            # =========================================================
+            # Recálculos das "Fotografias"
             val_valor_emp  = extrair_numero(valores_linha[3]) # D
             val_parcelas   = extrair_numero(valores_linha[4]) # E
             val_fee        = extrair_numero(valores_linha[8]) # I
             val_recebidas  = extrair_numero(valores_linha[13]) # N
             
-            # Recalculando H (Data): Copiamos a Data de Desembolso (F)
-            valores_linha[7] = valores_linha[5]
-            
-            # Recalculando J (Valor Repasse): D * I
-            valores_linha[9] = val_valor_emp * val_fee
-            
-            # Recalculando O (% Recebimento): N / E
-            valores_linha[14] = (val_recebidas / val_parcelas) if val_parcelas > 0 else 0.0
-            
-            # Recalculando P (Pendentes): E - N
-            valores_linha[15] = max(0, val_parcelas - val_recebidas)
+            valores_linha[7] = valores_linha[5] # H recebe F
+            valores_linha[9] = val_valor_emp * val_fee # J
+            valores_linha[14] = (val_recebidas / val_parcelas) if val_parcelas > 0 else 0.0 # O
+            valores_linha[15] = max(0, val_parcelas - val_recebidas) # P
 
-            # =========================================================
-            # 2. ESCREVENDO E APLICANDO ESTILOS ABSOLUTOS
-            # =========================================================
             for col_idx, valor in enumerate(valores_linha, start=1):
                 
                 texto_valor = str(valor).strip()
 
-                # --- Forçar limpeza da Data na Coluna H (8) ---
-                if col_idx == 8:
-                    if isinstance(valor, str) and 'T' in valor:
-                        # Corta a string no 'T' e pega só a data (ex: "2025-11-01")
-                        valor = valor.split('T')[0]
-                        # Transforma em data real para o Excel
-                        try: valor = pd.to_datetime(valor).date()
-                        except: pass
-                    elif isinstance(valor, pd.Timestamp):
-                        valor = valor.date()
-
-                ## --- Exceção para L (12) e M (13) ---
-                if col_idx in [12, 13] and texto_valor.startswith('='):
-                    # A fórmula vem da BASE (ex: VLOOKUP(A8438...))
-                    # Usamos Regex para trocar A8438 por A321 (linha_destino atual)
-                    formula_atualizada = re.sub(r'A\d+', f'A{linha_destino}', texto_valor)
-                    valor_excel = formula_atualizada
+                # =========================================================
+                # O CÉREBRO DA FORMATAÇÃO (BLOCO ÚNICO E LIMPO)
+                # =========================================================
                 
-                # Para o restante das colunas, mantemos a barreira contra fórmulas antigas
+                # 1. Injeção Dinâmica das Fórmulas em L (12) e M (13)
+                if col_idx == 12 and formula_molde_L.startswith('='):
+                    valor_excel = re.sub(r'\$?[Aa]\$?\d+', f'A{linha_destino}', formula_molde_L)
+                    
+                elif col_idx == 13 and formula_molde_M.startswith('='):
+                    valor_excel = re.sub(r'\$?[Aa]\$?\d+', f'A{linha_destino}', formula_molde_M)
+                    
+                # 2. Barreira de proteção (Para o resto, se for nulo ou fórmula velha = Branco)
                 elif pd.isna(valor) or texto_valor.startswith('='):
                     valor_excel = None
-                # Tratamento de datas do Pandas
+
+                # 3. Limpeza EXCLUSIVA da Coluna H (8) para tirar horas
+                elif col_idx == 8:
+                    if isinstance(valor, str) and 'T' in valor:
+                        data_str = valor.split('T')[0]
+                        try: valor_excel = pd.to_datetime(data_str).date()
+                        except: valor_excel = data_str
+                    elif isinstance(valor, pd.Timestamp):
+                        valor_excel = valor.date()
+                    else:
+                        valor_excel = valor
+
+                # 4. Tratamento de outras datas padrão do Pandas
                 elif isinstance(valor, pd.Timestamp):
                     valor_excel = valor.to_pydatetime()
+                
+                # 5. Qualquer outro dado passa direto
                 else:
                     valor_excel = valor
-                    
+
+                # =========================================================
+
+                # Escrever na Célula
                 celula_nova = ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
                 
-                # Tenta clonar estilo básico da linha anterior
+                # Clonar estilo
                 if linha_destino > 2:
                     celula_referencia = ws_inad.cell(row=linha_destino - 1, column=col_idx)
                     try: copiar_estilo(celula_referencia, celula_nova)
-                    except: pass # Se a função falhar, a formatação forçada abaixo salva
+                    except: pass 
                 
-                # --- FORMATAÇÃO GARANTIDA ---
-                # Resolvemos o problema do "45953" e padronizamos a tabela
+                # Formatação Numérica Nativa
                 if col_idx == 6:  # F (Data com Hora)
                     celula_nova.number_format = 'yyyy-mm-ddThh:mm:ss'
                 elif col_idx in [8, 13]:  # H e M (Datas Curtas)
@@ -1168,7 +1162,7 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
                     
             linha_destino += 1
             
-        st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados de A até P foram copiados com sucesso.")
+        st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados transferidos com sucesso.")
     else:
         st.success("✅ Nenhum inadimplente encontrado neste ciclo.")
         
