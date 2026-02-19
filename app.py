@@ -1199,33 +1199,47 @@ def remover_pagantes_inadimplentes(arquivo_base, base_wb):
         
     return base_wb, len(linhas_para_deletar)
 
-def limpar_pagantes_inadimplentes(arquivo_base, base_wb):
+def limpar_pagantes_inadimplentes(base_wb, parceiro_wb):
     """
-    Lê a planilha original (upload) com data_only=True para ler o "Sim" calculado pelo Excel,
-    e deleta essas linhas da nossa base oficial (de baixo para cima).
+    Solução Definitiva: Lê os IDs da aba Produção (Parceiro) e varre a aba INADIMPLENTES.
+    Se o ID estiver na Produção, significa que pagou. Deletamos a linha.
+    Não depende de fórmulas ou data_only=True.
     """
-    # 1. Carrega uma "cópia fantasma" do arquivo original apenas para ler os valores
-    arquivo_base.seek(0)
-    wb_valores = openpyxl.load_workbook(BytesIO(arquivo_base.read()), data_only=True)
-    
-    if 'INADIMPLENTES' not in wb_valores.sheetnames or 'INADIMPLENTES' not in base_wb.sheetnames:
+    if 'INADIMPLENTES' not in base_wb.sheetnames or 'Produção' not in parceiro_wb.sheetnames:
         return base_wb, 0
         
-    ws_valores = wb_valores['INADIMPLENTES']
-    ws_oficial = base_wb['INADIMPLENTES']
+    ws_inad = base_wb['INADIMPLENTES']
+    ws_producao = parceiro_wb['Produção']
     
+    # --- Função auxiliar de limpeza de ID ---
+    def limpar_id(valor):
+        if pd.isna(valor) or valor is None: return ""
+        return str(valor).strip().replace('.0', '')
+        
+    # 1. Pega TODOS os IDs (Coluna A) que vieram da Produção do Parceiro (Quem pagou)
+    ids_pagaram = set()
+    for row in range(2, ws_producao.max_row + 1):
+        celula_id = ws_producao.cell(row=row, column=1).value
+        if celula_id:
+            ids_pagaram.add(limpar_id(celula_id))
+            
+    if not ids_pagaram:
+        return base_wb, 0
+        
     linhas_deletadas = 0
     
-    # 2. Varre DE BAIXO PARA CIMA (Regra de ouro para não bugar o índice ao deletar)
-    for row in range(ws_valores.max_row, 1, -1):
-        # Coluna L é a 12
-        valor_col_L = ws_valores.cell(row=row, column=12).value
+    # 2. Varre a aba INADIMPLENTES de BAIXO PARA CIMA
+    for row in range(ws_inad.max_row, 1, -1):
+        celula_id = ws_inad.cell(row=row, column=1).value
         
-        # Se no arquivo original o Excel calculou "Sim", nós deletamos a linha na memória!
-        if str(valor_col_L).strip().upper() == 'SIM':
-            ws_oficial.delete_rows(row)
-            linhas_deletadas += 1
+        if celula_id is not None:
+            id_inad = limpar_id(celula_id)
             
+            # Se o Inadimplente está na lista de quem pagou, deleta!
+            if id_inad in ids_pagaram:
+                ws_inad.delete_rows(row)
+                linhas_deletadas += 1
+                
     return base_wb, linhas_deletadas
 
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
@@ -1870,7 +1884,7 @@ if processar and arquivos_prontos:
             progress_bar.progress(81)
             
             # Executa a limpeza usando o arquivo_base do Streamlit
-            base_wb, qtd_limpos = limpar_pagantes_inadimplentes(arquivo_base, base_wb)
+            base_wb, qtd_limpos = limpar_pagantes_inadimplentes(base_wb, parceiro_wb)
             
             with log_area:
                 if qtd_limpos > 0:
