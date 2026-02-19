@@ -1135,10 +1135,6 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
                     valor_excel = valor.to_pydatetime()
                 else:
                     valor_excel = valor
-
-                ## --- DEBUG ---
-                if col_idx in [12, 13]:
-                    print(f"DEBUG Linha {linha_destino} | Coluna {col_idx} | Tipo: {type(valor)} | Valor: {texto_valor[:30]}...")
                     
                 celula_nova = ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
                 
