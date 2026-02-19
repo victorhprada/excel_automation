@@ -1130,13 +1130,15 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
                 # Para o restante das colunas, mantemos a barreira contra fórmulas antigas
                 elif pd.isna(valor) or texto_valor.startswith('='):
                     valor_excel = None
-                
                 # Tratamento de datas do Pandas
                 elif isinstance(valor, pd.Timestamp):
                     valor_excel = valor.to_pydatetime()
-                    
                 else:
                     valor_excel = valor
+
+                ## --- DEBUG ---
+                if col_idx in [12, 13]:
+                    print(f"DEBUG Linha {linha_destino} | Coluna {col_idx} | Tipo: {type(valor)} | Valor: {texto_valor[:30]}...")
                     
                 celula_nova = ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
                 
