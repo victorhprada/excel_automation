@@ -1034,6 +1034,47 @@ def aplicar_formulas_dinamicas(ws_base, colunas_meses, base_wb):
         
     return linhas_processadas
 
+def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id):
+    """
+    Simula o MATCH(V, Q:Q, 0) em Python. 
+    Lê a Coluna Q, verifica quais IDs filtrados NÃO estão nela e envia para INADIMPLENTES.
+    """
+    # 1. Pega todos os valores já existentes na Coluna Q da aba de destino (Q é a 17ª letra)
+    # Usamos set() porque a busca em conjuntos no Python é instantânea
+    valores_coluna_q = set()
+    for celula in ws_destino['Q']:
+        if celula.value is not None:
+            # Convertendo para string para garantir que a comparação não falhe por tipo de dado
+            valores_coluna_q.add(str(celula.value).strip())
+            
+    # 2. Pega os IDs do DataFrame que acabaram de ser filtrados
+    ids_novos = dados_filtrados[nome_coluna_id].dropna()
+    
+    # 3. Lógica do "Não": Quais IDs novos NÃO estão no conjunto da Coluna Q?
+    ids_inadimplentes = []
+    for id_val in ids_novos.unique():
+        if str(id_val).strip() not in valores_coluna_q:
+            ids_inadimplentes.append(id_val)
+            
+    # 4. Grava os "Não" na aba INADIMPLENTES
+    if ids_inadimplentes:
+        if 'INADIMPLENTES' not in base_wb.sheetnames:
+            st.error("❌ Erro: Aba 'INADIMPLENTES' não encontrada na planilha.")
+            return base_wb
+            
+        ws_inad = base_wb['INADIMPLENTES']
+        linha_destino = ws_inad.max_row + 1
+        
+        for id_inad in ids_inadimplentes:
+            ws_inad.cell(row=linha_destino, column=1, value=id_inad)
+            linha_destino += 1
+            
+        st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes identificados e copiados para a aba 'INADIMPLENTES'.")
+    else:
+        st.success("✅ Nenhum inadimplente encontrado neste ciclo.")
+        
+    return base_wb
+
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
     """
     Versão FINAL: 
@@ -1135,6 +1176,13 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
              except: pass
 
         linha_atual += 1
+
+    base_wb = processar_inadimplentes(
+        dados_filtrados=dados_filtrados, 
+        ws_destino=ws_destino, 
+        base_wb=base_wb, 
+        nome_coluna_id=nome_coluna_id
+    )
         
     return qtd
 
@@ -1786,31 +1834,10 @@ if processar and arquivos_prontos:
             status_container.info("🔍 Filtrando inadimplentes...")
             progress_bar.progress(95)
             
-            try:
-                inadimplentes = filtrar_inadimplentes(ws_mes)
-                
-                if inadimplentes:
-                    ws_inadimplentes = base_wb['INADIMPLENTES']
-                    
-                    # Encontrar próxima linha vazia em INADIMPLENTES
-                    ultima_linha_inad = encontrar_ultima_linha(ws_inadimplentes)
-                    proxima_linha_inad = ultima_linha_inad + 1
-                    
-                    # Adicionar inadimplentes célula por célula (não usar .append())
-                    for row_data in inadimplentes:
-                        for col_idx, valor in enumerate(row_data, start=1):
-                            ws_inadimplentes.cell(row=proxima_linha_inad, column=col_idx, value=valor)
-                        proxima_linha_inad += 1
-                    
-                    with log_area:
-                        st.text(f"✅ {len(inadimplentes)} inadimplentes adicionados")
-                else:
-                    with log_area:
-                        st.text("ℹ️ Nenhum inadimplente encontrado")
-                    
-            except ValueError as e:
-                with log_area:
-                    st.text(f"⚠️ {str(e)}")
+            
+            with log_area:
+                st.text(f"✅ Inadimplentes já foram calculados e inseridos durante o Ciclo de Validação (Etapa 5.3.1)!")
+
             
             progress_bar.progress(100)
             
