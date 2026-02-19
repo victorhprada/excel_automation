@@ -1089,10 +1089,27 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
                 # BLINDAGEM: Se for NaN ou NaT (Pandas), vira None (Excel)
                 if pd.isna(valor):
                     valor_excel = None
+                elif isinstance(valor, pd.Timestamp):
+                    valor_excel = valor.to_pydatetime()
                 else:
                     valor_excel = valor
+
+                celula_nova = ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
+
+                # Pega a célula logo acima para usar como molde (desde que não seja o cabeçalho)
+                if linha_destino > 2:
+                    celula_referencia = ws_inad.cell(row=linha_destino - 1, column=col_idx)
                     
-                ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
+                    try:
+                        # Tenta usar a sua função já existente
+                        copiar_estilo(celula_referencia, celula_nova)
+                    except NameError:
+                        # Se a função não estiver acessível, fazemos a cópia manual e segura:
+                        celula_nova.number_format = celula_referencia.number_format
+                        celula_nova.font = copy(celula_referencia.font)
+                        celula_nova.alignment = copy(celula_referencia.alignment)
+                        celula_nova.border = copy(celula_referencia.border)
+                        celula_nova.fill = copy(celula_referencia.fill)
                 
             linha_destino += 1
             
