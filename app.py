@@ -1039,24 +1039,31 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
     Simula o MATCH(V, Q:Q, 0) em Python. 
     Lê a Coluna Q, verifica quais IDs filtrados NÃO estão nela e envia para INADIMPLENTES.
     """
+
+    # --- FUNÇÃO AUXILIAR PARA LIMPAR IDs ---
+    def limpar_id(valor):
+        if pd.isna(valor): return ""
+        # Transforma '12345.0' em '12345' para bater certinho com o Excel
+        return str(valor).strip().replace('.0', '')
+
     # 1. Pega todos os valores já existentes na Coluna Q da aba de destino (Q é a 17ª letra)
     # Usamos set() porque a busca em conjuntos no Python é instantânea
     valores_coluna_q = set()
     for celula in ws_destino['Q']:
         if celula.value is not None:
             # Convertendo para string para garantir que a comparação não falhe por tipo de dado
-            valores_coluna_q.add(str(celula.value).strip())
+            valores_coluna_q.add(limpar_id(celula.value))
             
     # 2. Pega os IDs do DataFrame que acabaram de ser filtrados
-    ids_novos = dados_filtrados[nome_coluna_id].dropna()
+    ids_novos = dados_filtrados[nome_coluna_id].dropna().apply(limpar_id)
     
     # 3. Lógica do "Não": Quais IDs novos NÃO estão no conjunto da Coluna Q?
     ids_inadimplentes = []
     for id_val in ids_novos.unique():
-        if str(id_val).strip() not in valores_coluna_q:
+        if id_val and id_val not in valores_coluna_q:
             ids_inadimplentes.append(id_val)
             
-    # 4. Grava os "Não" na aba INADIMPLENTES
+    # 4. Grava os dados completos na aba INADIMPLENTES
     if ids_inadimplentes:
         if 'INADIMPLENTES' not in base_wb.sheetnames:
             st.error("❌ Erro: Aba 'INADIMPLENTES' não encontrada na planilha.")
@@ -1065,11 +1072,13 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
         ws_inad = base_wb['INADIMPLENTES']
         linha_destino = ws_inad.max_row + 1
 
-        # Filtramos o DataFrame 'dados_filtrados' para manter APENAS as linhas dos inadimplentes.
-        df_inadimplentes = dados_filtrados[dados_filtrados[nome_coluna_id].isin(ids_inadimplentes)]
+        # Filtra o DataFrame original e remove duplicatas
+        # Criamos uma coluna temporária limpa só para fazer o filtro exato
+        df_temp = dados_filtrados.copy()
+        df_temp['ID_LIMPO'] = df_temp[nome_coluna_id].apply(limpar_id)
 
-        # Garantia contra duplicatas (Pega apenas 1 registro por CCB)
-        df_inadimplentes = df_inadimplentes.drop_duplicates(subset=[nome_coluna_id])
+        df_inadimplentes = df_temp[df_temp['ID_LIMPO'].isin(ids_inadimplentes)]
+        df_inadimplentes = df_inadimplentes.drop_duplicates(subset=['ID_LIMPO'])
         
         for index, row in df_inadimplentes.iterrows():
             # Pega os valores das 16 primeiras colunas (De 'A' até 'P')
@@ -1077,7 +1086,13 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
             
             # Cola cada valor na sua respectiva coluna na aba INADIMPLENTES
             for col_idx, valor in enumerate(valores_linha, start=1):
-                ws_inad.cell(row=linha_destino, column=col_idx, value=valor)
+                # BLINDAGEM: Se for NaN ou NaT (Pandas), vira None (Excel)
+                if pd.isna(valor):
+                    valor_excel = None
+                else:
+                    valor_excel = valor
+                    
+                ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
                 
             linha_destino += 1
             
@@ -1129,7 +1144,7 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
     try:
         # Força conversão para data (ignora erros de texto/sujeira)
         # dayfirst=True ajuda o Excel brasileiro (DD/MM/AAAA)
-        coluna_datas_limpas = pd.to_datetime(base_df[nome_coluna_data], errors='coerce', dayfirst=True).dt.date
+        coluna_datas_limpas = pd.to_datetime(base_df[nome_coluna_data], errors='coerce', format='mixed').dt.date
         
         # Mostra exemplo para você conferir
         exemplo = coluna_datas_limpas.dropna().iloc[0] if not coluna_datas_limpas.dropna().empty else "Vazio"
