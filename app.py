@@ -1118,11 +1118,23 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
             # =========================================================
             for col_idx, valor in enumerate(valores_linha, start=1):
                 
-                # Tratamento de Nulos, Datas e restolhos de fórmulas
-                if pd.isna(valor) or str(valor).strip().startswith('='):
+                texto_valor = str(valor).strip()
+
+                ## --- Exceção para L (12) e M (13) ---
+                if col_idx in [12, 13] and texto_valor.startswith('='):
+                    # A fórmula vem da BASE (ex: VLOOKUP(A8438...))
+                    # Usamos Regex para trocar A8438 por A321 (linha_destino atual)
+                    formula_atualizada = re.sub(r'A\d+', f'A{linha_destino}', texto_valor)
+                    valor_excel = formula_atualizada
+                
+                # Para o restante das colunas, mantemos a barreira contra fórmulas antigas
+                elif pd.isna(valor) or texto_valor.startswith('='):
                     valor_excel = None
+                
+                # Tratamento de datas do Pandas
                 elif isinstance(valor, pd.Timestamp):
                     valor_excel = valor.to_pydatetime()
+                    
                 else:
                     valor_excel = valor
                     
