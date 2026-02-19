@@ -1079,38 +1079,72 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
 
         df_inadimplentes = df_temp[df_temp['ID_LIMPO'].isin(ids_inadimplentes)]
         df_inadimplentes = df_inadimplentes.drop_duplicates(subset=['ID_LIMPO'])
+
+        # --- FUNÇÃO AUXILIAR PARA GARANTIR CÁLCULOS SEGUROS ---
+        def extrair_numero(val):
+            """Garante que valores com vírgula ou fórmulas quebrem o cálculo."""
+            if pd.isna(val) or str(val).strip().startswith('='): return 0.0
+            if isinstance(val, (int, float)): return float(val)
+            val_str = str(val).replace('.', '').replace(',', '.')
+            try: return float(val_str)
+            except: return 0.0
         
         for index, row in df_inadimplentes.iterrows():
-            # Pega os valores das 16 primeiras colunas (De 'A' até 'P')
             valores_linha = row.iloc[0:16].tolist()
             
-            # Cola cada valor na sua respectiva coluna na aba INADIMPLENTES
+            # =========================================================
+            # 1. RECALCULANDO FÓRMULAS PARA SALVAR "FOTOGRAFIA"
+            # Índices: D=3, E=4, F=5, I=8, N=13
+            # =========================================================
+            val_valor_emp  = extrair_numero(valores_linha[3]) # D
+            val_parcelas   = extrair_numero(valores_linha[4]) # E
+            val_fee        = extrair_numero(valores_linha[8]) # I
+            val_recebidas  = extrair_numero(valores_linha[13]) # N
+            
+            # Recalculando H (Data): Copiamos a Data de Desembolso (F)
+            valores_linha[7] = valores_linha[5]
+            
+            # Recalculando J (Valor Repasse): D * I
+            valores_linha[9] = val_valor_emp * val_fee
+            
+            # Recalculando O (% Recebimento): N / E
+            valores_linha[14] = (val_recebidas / val_parcelas) if val_parcelas > 0 else 0.0
+            
+            # Recalculando P (Pendentes): E - N
+            valores_linha[15] = max(0, val_parcelas - val_recebidas)
+
+            # =========================================================
+            # 2. ESCREVENDO E APLICANDO ESTILOS ABSOLUTOS
+            # =========================================================
             for col_idx, valor in enumerate(valores_linha, start=1):
-                # BLINDAGEM: Se for NaN ou NaT (Pandas), vira None (Excel)
-                if pd.isna(valor):
+                
+                # Tratamento de Nulos, Datas e restolhos de fórmulas
+                if pd.isna(valor) or str(valor).strip().startswith('='):
                     valor_excel = None
                 elif isinstance(valor, pd.Timestamp):
                     valor_excel = valor.to_pydatetime()
                 else:
                     valor_excel = valor
-
+                    
                 celula_nova = ws_inad.cell(row=linha_destino, column=col_idx, value=valor_excel)
-
-                # Pega a célula logo acima para usar como molde (desde que não seja o cabeçalho)
+                
+                # Tenta clonar estilo básico da linha anterior
                 if linha_destino > 2:
                     celula_referencia = ws_inad.cell(row=linha_destino - 1, column=col_idx)
-                    
-                    try:
-                        # Tenta usar a sua função já existente
-                        copiar_estilo(celula_referencia, celula_nova)
-                    except NameError:
-                        # Se a função não estiver acessível, fazemos a cópia manual e segura:
-                        celula_nova.number_format = celula_referencia.number_format
-                        celula_nova.font = copy(celula_referencia.font)
-                        celula_nova.alignment = copy(celula_referencia.alignment)
-                        celula_nova.border = copy(celula_referencia.border)
-                        celula_nova.fill = copy(celula_referencia.fill)
+                    try: copiar_estilo(celula_referencia, celula_nova)
+                    except: pass # Se a função falhar, a formatação forçada abaixo salva
                 
+                # --- FORMATAÇÃO GARANTIDA ---
+                # Resolvemos o problema do "45953" e padronizamos a tabela
+                if col_idx == 6:  # F (Data com Hora)
+                    celula_nova.number_format = 'yyyy-mm-ddThh:mm:ss'
+                elif col_idx in [8, 13]:  # H e M (Datas Curtas)
+                    celula_nova.number_format = 'dd/mm/yyyy'
+                elif col_idx in [4, 10]: # D e J (Moeda/Valores)
+                    celula_nova.number_format = '#,##0.00'
+                elif col_idx in [9, 15]: # I e O (Porcentagem)
+                    celula_nova.number_format = '0.00%'
+                    
             linha_destino += 1
             
         st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados de A até P foram copiados com sucesso.")
