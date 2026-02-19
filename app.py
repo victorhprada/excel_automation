@@ -1199,6 +1199,43 @@ def remover_pagantes_inadimplentes(arquivo_base, base_wb):
         
     return base_wb, len(linhas_para_deletar)
 
+def limpar_pagantes_inadimplentes(base_wb, dados_filtrados, nome_coluna_id):
+    """
+    Varre a aba INADIMPLENTES de baixo para cima e deleta as linhas
+    cujos IDs constam no dados_filtrados (ou seja, realizaram pagamento neste ciclo).
+    """
+    if 'INADIMPLENTES' not in base_wb.sheetnames:
+        return base_wb, 0
+        
+    ws_inad = base_wb['INADIMPLENTES']
+    
+    # --- Função auxiliar de limpeza de ID ---
+    def limpar_id(valor):
+        if pd.isna(valor): return ""
+        return str(valor).strip().replace('.0', '')
+        
+    # 1. Pega os IDs de quem pagou NESTE ciclo
+    ids_pagos = set(dados_filtrados[nome_coluna_id].dropna().apply(limpar_id))
+    
+    if not ids_pagos:
+        return base_wb, 0 # Ninguém pagou, nada a limpar
+        
+    linhas_deletadas = 0
+    
+    # 2. Varre a aba DE BAIXO PARA CIMA (Regra de ouro para deletar linhas)
+    for row in range(ws_inad.max_row, 1, -1):
+        celula_id = ws_inad.cell(row=row, column=1).value
+        
+        if celula_id is not None:
+            id_atual = limpar_id(celula_id)
+            
+            # Se o ID do inadimplente está na lista de pagamentos, ele está quite! Deleta ele.
+            if id_atual in ids_pagos:
+                ws_inad.delete_rows(row)
+                linhas_deletadas += 1
+                
+    return base_wb, linhas_deletadas
+
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
     """
     Versão FINAL: 
@@ -1300,6 +1337,15 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
              except: pass
 
         linha_atual += 1
+
+    base_wb, qtd_limpos = limpar_pagantes_inadimplentes(
+        base_wb=base_wb, 
+        dados_filtrados=dados_filtrados, 
+        nome_coluna_id=nome_coluna_id
+    )
+    
+    if qtd_limpos > 0:
+        st.success(f"🧹 Sucesso! {qtd_limpos} CCBs quitaram suas parcelas e foram removidos da aba INADIMPLENTES.")
 
     base_wb = processar_inadimplentes(
         dados_filtrados=dados_filtrados, 
