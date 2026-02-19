@@ -1120,6 +1120,17 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
                 
                 texto_valor = str(valor).strip()
 
+                # --- Forçar limpeza da Data na Coluna H (8) ---
+                if col_idx == 8:
+                    if isinstance(valor, str) and 'T' in valor:
+                        # Corta a string no 'T' e pega só a data (ex: "2025-11-01")
+                        valor = valor.split('T')[0]
+                        # Transforma em data real para o Excel
+                        try: valor = pd.to_datetime(valor).date()
+                        except: pass
+                    elif isinstance(valor, pd.Timestamp):
+                        valor = valor.date()
+
                 ## --- Exceção para L (12) e M (13) ---
                 if col_idx in [12, 13] and texto_valor.startswith('='):
                     # A fórmula vem da BASE (ex: VLOOKUP(A8438...))
@@ -1162,6 +1173,37 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
         st.success("✅ Nenhum inadimplente encontrado neste ciclo.")
         
     return base_wb
+
+def remover_pagantes_inadimplentes(arquivo_base, base_wb):
+    """
+    Lê a planilha com data_only=True para avaliar as fórmulas.
+    Descobre quem pagou ('Sim' na Coluna L) e deleta a linha no base_wb oficial.
+    """
+    # 1. Carrega uma "cópia fantasma" apenas para ler os valores (resultados)
+    arquivo_base.seek(0)
+    wb_valores = openpyxl.load_workbook(BytesIO(arquivo_base.read()), data_only=True)
+    
+    if 'INADIMPLENTES' not in wb_valores.sheetnames:
+        return base_wb, 0
+        
+    ws_valores = wb_valores['INADIMPLENTES']
+    ws_oficial = base_wb['INADIMPLENTES']
+    
+    linhas_para_deletar = []
+    
+    # 2. Varre DE BAIXO PARA CIMA (Muito importante!)
+    for row in range(ws_valores.max_row, 1, -1):
+        # Coluna L é a 12
+        valor_col_L = ws_valores.cell(row=row, column=12).value
+        
+        if str(valor_col_L).strip().upper() == 'SIM':
+            linhas_para_deletar.append(row)
+            
+    # 3. Deleta as linhas na planilha oficial que tem as fórmulas
+    for row in linhas_para_deletar:
+        ws_oficial.delete_rows(row)
+        
+    return base_wb, len(linhas_para_deletar)
 
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
     """
@@ -1917,16 +1959,16 @@ if processar and arquivos_prontos:
             progress_bar.progress(90)
             
             # ==================================================
-            # ETAPA 6: Filtrar Inadimplentes
+            # ETAPA 6: Limpando Inadimplentes
             # ==================================================
-            status_container.info("🔍 Filtrando inadimplentes...")
-            progress_bar.progress(95)
+            status_container.info("🧹 Limpando Inadimplentes que já pagaram...")
             
-            
+            # Chama a limpeza
+            base_wb, qtd_removidos = remover_pagantes_inadimplentes(arquivo_base, base_wb)
             with log_area:
-                st.text(f"✅ Inadimplentes já foram calculados e inseridos durante o Ciclo de Validação (Etapa 5.3.1)!")
-
+                st.text(f"✅ {qtd_removidos} registros com 'Sim' foram removidos do histórico.")
             
+            progress_bar.progress(95)
             progress_bar.progress(100)
             
             # ==================================================
