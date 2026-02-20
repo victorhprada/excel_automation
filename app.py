@@ -1165,6 +1165,11 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
         st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados transferidos com sucesso.")
     else:
         st.success("✅ Nenhum inadimplente encontrado neste ciclo.")
+
+    if 'INADIMPLENTES' in base_wb.sheetnames:
+        ws_inad = base_wb['INADIMPLENTES']
+        # Aplica o filtro em toda a extensão da tabela (ex: A1:P500)
+        ws_inad.auto_filter.ref = ws_inad.dimensions
         
     return base_wb
 
@@ -1199,45 +1204,6 @@ def remover_pagantes_inadimplentes(arquivo_base, base_wb):
         
     return base_wb, len(linhas_para_deletar)
 
-def limpar_pagantes_inadimplentes(base_wb):
-    """
-    Varre todas as abas de meses (ex: SET.25, FEV.26), coleta os IDs de quem pagou,
-    e deleta eles da aba INADIMPLENTES (Simulando a fórmula VLOOKUP em Python).
-    """
-    if 'INADIMPLENTES' not in base_wb.sheetnames:
-        return base_wb, 0
-
-    ws_inad = base_wb['INADIMPLENTES']
-
-    def limpar_id(val):
-        if pd.isna(val) or val is None: return ""
-        return str(val).strip().replace('.0', '')
-
-    # 1. Encontrar todas as abas de meses (que contêm um ponto no nome)
-    abas_meses = [aba for aba in base_wb.sheetnames if '.' in aba]
-
-    # 2. Coletar TODOS os IDs que pagaram em qualquer um desses meses
-    ids_pagaram_historico = set()
-    for nome_aba in abas_meses:
-        ws_mes = base_wb[nome_aba]
-        # O ID de quem pagou fica na Coluna A dessas abas
-        for row in range(2, ws_mes.max_row + 1):
-            val_id = ws_mes.cell(row=row, column=1).value
-            if val_id:
-                ids_pagaram_historico.add(limpar_id(val_id))
-
-    # 3. Varre a aba INADIMPLENTES de baixo para cima e deleta quem pagou
-    linhas_deletadas = 0
-    for row in range(ws_inad.max_row, 1, -1):
-        val_id = ws_inad.cell(row=row, column=1).value
-        
-        if val_id:
-            # Se o Inadimplente está na lista gigante de quem pagou, deleta!
-            if limpar_id(val_id) in ids_pagaram_historico:
-                ws_inad.delete_rows(row)
-                linhas_deletadas += 1
-
-    return base_wb, linhas_deletadas
 
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
     """
@@ -1877,19 +1843,6 @@ if processar and arquivos_prontos:
             
             progress_bar.progress(80)
 
-            status_container.info("🧹 Limpando Inadimplentes que já pagaram...")
-            progress_bar.progress(81)
-            
-            # Executa a limpeza usando o arquivo_base do Streamlit
-            base_wb, qtd_limpos = limpar_pagantes_inadimplentes(base_wb)
-            
-            with log_area:
-                if qtd_limpos > 0:
-                    st.success(f"✅ {qtd_limpos} registros com 'Sim' foram removidos da aba INADIMPLENTES.")
-                else:
-                    st.text("ℹ️ Nenhum pagante ('Sim') encontrado para remover nesta rodada.")
-
-            progress_bar.progress(82)
 
             # ==================================================
             # ETAPA 5.3.1: Processar Ciclo de Validação (Colunas V, W, X)
