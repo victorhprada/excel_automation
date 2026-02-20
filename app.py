@@ -1199,47 +1199,44 @@ def remover_pagantes_inadimplentes(arquivo_base, base_wb):
         
     return base_wb, len(linhas_para_deletar)
 
-def limpar_pagantes_inadimplentes(base_wb, parceiro_wb):
+def limpar_pagantes_inadimplentes(base_wb):
     """
-    Solução Definitiva: Lê os IDs da aba Produção (Parceiro) e varre a aba INADIMPLENTES.
-    Se o ID estiver na Produção, significa que pagou. Deletamos a linha.
-    Não depende de fórmulas ou data_only=True.
+    Varre todas as abas de meses (ex: SET.25, FEV.26), coleta os IDs de quem pagou,
+    e deleta eles da aba INADIMPLENTES (Simulando a fórmula VLOOKUP em Python).
     """
-    if 'INADIMPLENTES' not in base_wb.sheetnames or 'Produção' not in parceiro_wb.sheetnames:
+    if 'INADIMPLENTES' not in base_wb.sheetnames:
         return base_wb, 0
-        
+
     ws_inad = base_wb['INADIMPLENTES']
-    ws_producao = parceiro_wb['Produção']
-    
-    # --- Função auxiliar de limpeza de ID ---
-    def limpar_id(valor):
-        if pd.isna(valor) or valor is None: return ""
-        return str(valor).strip().replace('.0', '')
-        
-    # 1. Pega TODOS os IDs (Coluna A) que vieram da Produção do Parceiro (Quem pagou)
-    ids_pagaram = set()
-    for row in range(2, ws_producao.max_row + 1):
-        celula_id = ws_producao.cell(row=row, column=1).value
-        if celula_id:
-            ids_pagaram.add(limpar_id(celula_id))
-            
-    if not ids_pagaram:
-        return base_wb, 0
-        
+
+    def limpar_id(val):
+        if pd.isna(val) or val is None: return ""
+        return str(val).strip().replace('.0', '')
+
+    # 1. Encontrar todas as abas de meses (que contêm um ponto no nome)
+    abas_meses = [aba for aba in base_wb.sheetnames if '.' in aba]
+
+    # 2. Coletar TODOS os IDs que pagaram em qualquer um desses meses
+    ids_pagaram_historico = set()
+    for nome_aba in abas_meses:
+        ws_mes = base_wb[nome_aba]
+        # O ID de quem pagou fica na Coluna A dessas abas
+        for row in range(2, ws_mes.max_row + 1):
+            val_id = ws_mes.cell(row=row, column=1).value
+            if val_id:
+                ids_pagaram_historico.add(limpar_id(val_id))
+
+    # 3. Varre a aba INADIMPLENTES de baixo para cima e deleta quem pagou
     linhas_deletadas = 0
-    
-    # 2. Varre a aba INADIMPLENTES de BAIXO PARA CIMA
     for row in range(ws_inad.max_row, 1, -1):
-        celula_id = ws_inad.cell(row=row, column=1).value
+        val_id = ws_inad.cell(row=row, column=1).value
         
-        if celula_id is not None:
-            id_inad = limpar_id(celula_id)
-            
-            # Se o Inadimplente está na lista de quem pagou, deleta!
-            if id_inad in ids_pagaram:
+        if val_id:
+            # Se o Inadimplente está na lista gigante de quem pagou, deleta!
+            if limpar_id(val_id) in ids_pagaram_historico:
                 ws_inad.delete_rows(row)
                 linhas_deletadas += 1
-                
+
     return base_wb, linhas_deletadas
 
 def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, data_fim):
@@ -1884,7 +1881,7 @@ if processar and arquivos_prontos:
             progress_bar.progress(81)
             
             # Executa a limpeza usando o arquivo_base do Streamlit
-            base_wb, qtd_limpos = limpar_pagantes_inadimplentes(base_wb, parceiro_wb)
+            base_wb, qtd_limpos = limpar_pagantes_inadimplentes(base_wb)
             
             with log_area:
                 if qtd_limpos > 0:
