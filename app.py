@@ -21,6 +21,7 @@ from fastapi import HTTPException
 # ========================================
 
 app = FastAPI(title="API de Validação de Faturamento Excel")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,6 +29,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "mensagem": "🚀 API de Validação de Faturamento rodando perfeitamente!",
+        "versao": "1.0"
+    }
 
 @app.post("/api/validar-faturamento")
 async def validar_faturamento(
