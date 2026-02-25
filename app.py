@@ -64,7 +64,7 @@ async def processar_comissao(
         # Assumindo que o Lovable vai mandar no formato HTML padrão "YYYY-MM-DD"
         dt_inicio = datetime.strptime(data_inicio, "%Y-%m-%d").date()
         dt_fim = datetime.strptime(data_fim, "%Y-%m-%d").date()
-        
+
         print("🚀 3. Iniciando limpeza e regras de negócio...")
         # =================================================================
         # ETAPA 2: LÓGICA DE NEGÓCIO PURA (Sem comandos Streamlit)
@@ -135,10 +135,17 @@ async def processar_comissao(
             headers={"Content-Disposition": f"attachment; filename={nome_arquivo}"}
         )
 
+    except ValueError as ve:
+        # Captura os erros que VOCÊ criou (ex: falta de aba) e devolve como 400 (Bad Request)
+        print(f"⚠️ Erro de Validação: {str(ve)}")
+        raise HTTPException(status_code=400, detail=str(ve))
+        
     except Exception as e:
-        # Captura qualquer erro de código e devolve para o front-end exibir um Toast vermelho
-        raise HTTPException(status_code=500, detail=f"Erro interno no servidor: {str(e)}")
+        # Captura erros reais de travamento do servidor e devolve como 500
+        print(f"❌ Erro Interno Crítico: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro no servidor: {str(e)}")
 
+        
 def copiar_estilo(celula_origem, celula_destino):
     """
     Copia atributos de formatação de uma célula para outra.
