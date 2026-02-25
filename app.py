@@ -10,11 +10,15 @@ from dateutil.relativedelta import relativedelta
 import re
 from datetime import datetime
 from openpyxl.utils import column_index_from_string
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
-from fastapi import HTTPException
+import os
+import tempfile
+import shutil
+import gc
+
 
 # ========================================
 # Funções Auxiliares
@@ -40,65 +44,72 @@ async def root():
 
 @app.post("/api/processar-comissao")
 async def processar_comissao(
+    background_tasks: BackgroundTasks, # Novo: Tarefa em segundo plano
     arquivo_base: UploadFile = File(...),
     arquivo_parceiro: UploadFile = File(...),
-    
-    # 2. Recebendo os Textos (Mês e Datas)
     target_month: str = Form(...),
     data_inicio: str = Form(...),
     data_fim: str = Form(...)
 ):
+    # Criamos variáveis para guardar os caminhos dos arquivos no disco
+    tmp_base_path = ""
+    tmp_parceiro_path = ""
+    tmp_output_path = ""
+    
     try:
-        # =================================================================
-        # ETAPA 1: LER ARQUIVOS PARA A MEMÓRIA RAM
-        # =================================================================
-        base_bytes = io.BytesIO(await arquivo_base.read())
-        parceiro_bytes = io.BytesIO(await arquivo_parceiro.read())
-        print("📥 1. Arquivos recebidos pelo Render! Lendo para a memória...")
+        print("📥 1. Arquivos recebidos. Salvando no SSD do Render...")
         
-        parceiro_wb = openpyxl.load_workbook(parceiro_bytes, data_only=True)
-        base_wb = openpyxl.load_workbook(base_bytes, data_only=False)
-        print("⚙️ 2. Carregando Workbooks no OpenPyxl (Isso pode demorar)...")
+        # =================================================================
+        # ETAPA 1: SALVAR NO DISCO EM VEZ DA MEMÓRIA RAM
+        # =================================================================
+        
+        # Cria arquivos temporários seguros no disco do Linux
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_base:
+            shutil.copyfileobj(arquivo_base.file, tmp_base)
+            tmp_base_path = tmp_base.name
+            
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_parceiro:
+            shutil.copyfileobj(arquivo_parceiro.file, tmp_parceiro)
+            tmp_parceiro_path = tmp_parceiro.name
 
-        # Converter datas recebidas do Front-end (String) para objetos Date do Python
-        # Assumindo que o Lovable vai mandar no formato HTML padrão "YYYY-MM-DD"
+        print("⚙️ 2. Lendo planilhas do Disco para o OpenPyxl...")
+        # Lendo diretamente do arquivo físico (Alivia a RAM)
+        parceiro_wb = openpyxl.load_workbook(tmp_parceiro_path, data_only=True)
+        base_wb = openpyxl.load_workbook(tmp_base_path, data_only=False)
+
+        # Datas
         dt_inicio = datetime.strptime(data_inicio, "%Y-%m-%d").date()
         dt_fim = datetime.strptime(data_fim, "%Y-%m-%d").date()
 
-        print("🚀 3. Iniciando limpeza e regras de negócio...")
         # =================================================================
-        # ETAPA 2: LÓGICA DE NEGÓCIO PURA (Sem comandos Streamlit)
+        # ETAPA 2: LÓGICA DE NEGÓCIO PURA (Suas funções)
         # =================================================================
+        print("🚀 3. Iniciando validações e regras de negócio...")
         
-        # 2.1 Validar Abas
         valido, mensagem = validar_abas_necessarias(parceiro_wb, base_wb)
         if not valido:
-            raise HTTPException(status_code=400, detail=f"Erro de validação: {mensagem}")
+            raise ValueError(f"Erro de validação: {mensagem}")
             
         template_existe, msg_template = validar_template_jan26(base_wb)
         if not template_existe:
-            raise HTTPException(status_code=400, detail=f"Template ausente: {msg_template}")
+            raise ValueError(f"Template ausente: {msg_template}")
 
-        # 2.2 Clonar Template JAN.26
         if target_month in base_wb.sheetnames:
             del base_wb[target_month]
             
         ws_mes = base_wb.copy_worksheet(base_wb['JAN.26'])
         ws_mes.title = target_month
 
-        # 2.3 Limpar e Inserir Dados do Parceiro
         limpar_dados_worksheet(ws_mes, manter_linha_1=True)
         inserir_dados_colunas_especificas(parceiro_wb['Parcelas Pagas'], ws_mes, 1, 13, 2)
         aplicar_regras_colunas_n_x(ws_mes, target_month, 2)
 
-        # 2.4 Atualizar Aba BASE
         ultima_linha_base = encontrar_ultima_linha(base_wb['BASE'])
         linha_inicio_append = ultima_linha_base + 1
         
         copiar_producao_para_base(parceiro_wb['Produção'], base_wb['BASE'])
         atualizar_aba_base(base_wb, parceiro_wb, target_month, linha_inicio_append)
 
-        # 2.6 Recarregar BASE no Pandas para pegar novos registros
         ws_base_ativa = base_wb['BASE']
         data = list(ws_base_ativa.values)
         if data:
@@ -107,13 +118,10 @@ async def processar_comissao(
         else:
             base_df_atualizado = pd.DataFrame()
 
-        # 2.7 Ciclo de Validação e Inserção de Novos Inadimplentes
-        # A processar_ciclo_validacao também precisa ter os st. removidos por dentro!
         processar_ciclo_validacao(
             base_df_atualizado, base_wb, target_month, dt_inicio, dt_fim
         )
 
-        # 2.8 Atualizar Aba RESUMO
         if 'RESUMO' in base_wb.sheetnames:
             coluna_alvo = atualizar_resumo_mes_faturamento(base_wb, target_month)
             atualizar_resumo_ciclo_pmt(base_wb, target_month)
@@ -121,31 +129,49 @@ async def processar_comissao(
             atualizar_resumo_bloco_final(base_wb, target_month, col_idx=coluna_alvo)
 
         # =================================================================
-        # ETAPA 3: DEVOLVER O ARQUIVO PRONTO PARA O LOVABLE
+        # ETAPA 3: SALVAR RESULTADO NO DISCO E DEVOLVER
         # =================================================================
-        output = io.BytesIO()
-        base_wb.save(output)
-        output.seek(0)
+        print("💾 4. Processamento concluído. Salvando arquivo final no SSD...")
         
+        # Livrando a memória das planilhas que não precisamos mais
+        del parceiro_wb
+        del base_df_atualizado
+        gc.collect() # 🧹 Força a limpeza da memória RAM agora mesmo!
+
+        # Salva o resultado num arquivo físico
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_out:
+            tmp_output_path = tmp_out.name
+            
+        base_wb.save(tmp_output_path)
         nome_arquivo = f"Processado_{target_month}.xlsx"
-        
-        return StreamingResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename={nome_arquivo}"}
+
+        print("✅ 5. Arquivo salvo. Enviando para o Lovable...")
+
+        # Agenda a exclusão dos 3 arquivos físicos ASSIM QUE O DOWNLOAD TERMINAR
+        def limpar_arquivos_temporarios():
+            for p in [tmp_base_path, tmp_parceiro_path, tmp_output_path]:
+                if os.path.exists(p):
+                    os.remove(p)
+            print("🧹 Lixo físico do Render limpo com sucesso!")
+
+        background_tasks.add_task(limpar_arquivos_temporarios)
+
+        # FileResponse é otimizado para ler do disco com gasto quase zero de RAM
+        return FileResponse(
+            path=tmp_output_path,
+            filename=nome_arquivo,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     except ValueError as ve:
-        # Captura os erros que VOCÊ criou (ex: falta de aba) e devolve como 400 (Bad Request)
         print(f"⚠️ Erro de Validação: {str(ve)}")
         raise HTTPException(status_code=400, detail=str(ve))
         
     except Exception as e:
-        # Captura erros reais de travamento do servidor e devolve como 500
         print(f"❌ Erro Interno Crítico: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro no servidor: {str(e)}")
 
-        
+
 def copiar_estilo(celula_origem, celula_destino):
     """
     Copia atributos de formatação de uma célula para outra.
