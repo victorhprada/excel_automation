@@ -16,10 +16,122 @@ from dateutil.relativedelta import relativedelta
 import re
 from datetime import datetime
 from openpyxl.utils import column_index_from_string
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+import io
+from fastapi import HTTPException
 
 # ========================================
 # Funções Auxiliares
 # ========================================
+
+app = FastAPI(title="API de Validação de Faturamento Excel")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/api/validar-faturamento")
+async def validar_faturamento(
+    arquivo_base: UploadFile = File(...),
+    arquivo_parceiro: UploadFile = File(...),
+    
+    # 2. Recebendo os Textos (Mês e Datas)
+    target_month: str = Form(...),
+    data_inicio: str = Form(...),
+    data_fim: str = Form(...)
+):
+    try:
+        # =================================================================
+        # ETAPA 1: LER ARQUIVOS PARA A MEMÓRIA RAM
+        # =================================================================
+        base_bytes = io.BytesIO(await arquivo_base.read())
+        parceiro_bytes = io.BytesIO(await arquivo_parceiro.read())
+        
+        parceiro_wb = openpyxl.load_workbook(parceiro_bytes, data_only=True)
+        base_wb = openpyxl.load_workbook(base_bytes, data_only=False)
+
+        # Converter datas recebidas do Front-end (String) para objetos Date do Python
+        # Assumindo que o Lovable vai mandar no formato HTML padrão "YYYY-MM-DD"
+        dt_inicio = datetime.strptime(data_inicio, "%Y-%m-%d").date()
+        dt_fim = datetime.strptime(data_fim, "%Y-%m-%d").date()
+
+        # =================================================================
+        # ETAPA 2: LÓGICA DE NEGÓCIO PURA (Sem comandos Streamlit)
+        # =================================================================
+        
+        # 2.1 Validar Abas
+        valido, mensagem = validar_abas_necessarias(parceiro_wb, base_wb)
+        if not valido:
+            raise HTTPException(status_code=400, detail=f"Erro de validação: {mensagem}")
+            
+        template_existe, msg_template = validar_template_jan26(base_wb)
+        if not template_existe:
+            raise HTTPException(status_code=400, detail=f"Template ausente: {msg_template}")
+
+        # 2.2 Clonar Template JAN.26
+        if target_month in base_wb.sheetnames:
+            del base_wb[target_month]
+            
+        ws_mes = base_wb.copy_worksheet(base_wb['JAN.26'])
+        ws_mes.title = target_month
+
+        # 2.3 Limpar e Inserir Dados do Parceiro
+        limpar_dados_worksheet(ws_mes, manter_linha_1=True)
+        inserir_dados_colunas_especificas(parceiro_wb['Parcelas Pagas'], ws_mes, 1, 13, 2)
+        aplicar_regras_colunas_n_x(ws_mes, target_month, 2)
+
+        # 2.4 Atualizar Aba BASE
+        ultima_linha_base = encontrar_ultima_linha(base_wb['BASE'])
+        linha_inicio_append = ultima_linha_base + 1
+        
+        copiar_producao_para_base(parceiro_wb['Produção'], base_wb['BASE'])
+        atualizar_aba_base(base_wb, parceiro_wb, target_month, linha_inicio_append)
+
+        # 2.6 Recarregar BASE no Pandas para pegar novos registros
+        ws_base_ativa = base_wb['BASE']
+        data = list(ws_base_ativa.values)
+        if data:
+            cols = data[0]
+            base_df_atualizado = pd.DataFrame(data[1:], columns=cols)
+        else:
+            base_df_atualizado = pd.DataFrame()
+
+        # 2.7 Ciclo de Validação e Inserção de Novos Inadimplentes
+        # A processar_ciclo_validacao também precisa ter os st. removidos por dentro!
+        processar_ciclo_validacao(
+            base_df_atualizado, base_wb, target_month, dt_inicio, dt_fim
+        )
+
+        # 2.8 Atualizar Aba RESUMO
+        if 'RESUMO' in base_wb.sheetnames:
+            coluna_alvo = atualizar_resumo_mes_faturamento(base_wb, target_month)
+            atualizar_resumo_ciclo_pmt(base_wb, target_month)
+            verificar_e_corrigir_headers_regras(base_wb['RESUMO'])
+            atualizar_resumo_bloco_final(base_wb, target_month, col_idx=coluna_alvo)
+
+        # =================================================================
+        # ETAPA 3: DEVOLVER O ARQUIVO PRONTO PARA O LOVABLE
+        # =================================================================
+        output = io.BytesIO()
+        base_wb.save(output)
+        output.seek(0)
+        
+        nome_arquivo = f"Processado_{target_month}.xlsx"
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={nome_arquivo}"}
+        )
+
+    except Exception as e:
+        # Captura qualquer erro de código e devolve para o front-end exibir um Toast vermelho
+        raise HTTPException(status_code=500, detail=f"Erro interno no servidor: {str(e)}")
 
 def copiar_estilo(celula_origem, celula_destino):
     """
@@ -1063,8 +1175,8 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
     # 4. Grava os dados completos na aba INADIMPLENTES
     if ids_inadimplentes:
         if 'INADIMPLENTES' not in base_wb.sheetnames:
-            st.error("❌ Erro: Aba 'INADIMPLENTES' não encontrada na planilha.")
-            return base_wb
+            print("❌ Erro: Aba 'INADIMPLENTES' não encontrada na planilha.")
+            raise ValueError("Aba 'INADIMPLENTES' não encontrada na planilha.")
             
         ws_inad = base_wb['INADIMPLENTES']
         ws_base = base_wb['BASE']
@@ -1223,8 +1335,8 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
     
     # 1. Preparar Aba Destino
     if target_month_name not in base_wb.sheetnames:
-        st.error(f"❌ Erro: Aba {target_month_name} não encontrada.")
-        return 0
+        print(f"❌ Erro: Aba {target_month_name} não encontrada.")
+        raise ValueError(f"Aba {target_month_name} não encontrada.")
     ws_destino = base_wb[target_month_name]
     
     # 2. Localizar as Colunas de Origem (Baseadas na Letra)
@@ -1237,11 +1349,11 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
         nome_coluna_data = base_df.columns[idx_data]
         nome_coluna_id = base_df.columns[0] # Assume Coluna A (ID/CCB)
         
-        st.info(f"📍 Lendo datas da Coluna **{COLUNA_DATA_LETRA}** (Cabeçalho: '{nome_coluna_data}')")
+        print(f"📍 Lendo datas da Coluna **{COLUNA_DATA_LETRA}** (Cabeçalho: '{nome_coluna_data}')")
         
     except IndexError:
-        st.error(f"❌ Erro: A coluna {COLUNA_DATA_LETRA} não existe na planilha BASE.")
-        return 0
+        print(f"❌ Erro: A coluna {COLUNA_DATA_LETRA} não existe na planilha BASE.")
+        raise ValueError(f"A coluna {COLUNA_DATA_LETRA} não existe na planilha BASE.")
 
     # 3. Tratamento e Filtro
     try:
@@ -1266,8 +1378,8 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
             st.success(f"✅ Filtro OK! {qtd} registros encontrados.")
 
     except Exception as e:
-        st.error(f"Erro ao processar datas: {e}")
-        return 0
+        print(f"Erro ao processar datas: {e}")
+        raise ValueError(f"Erro ao processar datas: {e}")
 
     # 4. Escrever Dados nos Destinos V (22), W (23) e X (24)
     # Limpa área antiga (garantia para não misturar dados)
@@ -1599,8 +1711,8 @@ with col1:
     )
     
     if arquivo_parceiro:
-        st.success(f"✅ {arquivo_parceiro.name}")
-        st.info(f"Tamanho: {arquivo_parceiro.size / 1024:.2f} KB")
+        print(f"✅ {arquivo_parceiro.name}")
+        print(f"Tamanho: {arquivo_parceiro.size / 1024:.2f} KB")
 
 with col2:
     st.subheader("Arquivo BASE")
@@ -1612,8 +1724,8 @@ with col2:
     )
     
     if arquivo_base:
-        st.success(f"✅ {arquivo_base.name}")
-        st.info(f"Tamanho: {arquivo_base.size / 1024:.2f} KB")
+        print(f"✅ {arquivo_base.name}")
+        print(f"Tamanho: {arquivo_base.size / 1024:.2f} KB")
 
 st.markdown("---")
 
@@ -1645,7 +1757,6 @@ if processar and arquivos_prontos:
     try:
         # Container para status principal
         status_container = st.empty()
-        progress_bar = st.progress(0)
         
         # Expander para logs detalhados
         with st.expander("📋 Ver Logs Detalhados", expanded=False):
@@ -1660,7 +1771,6 @@ if processar and arquivos_prontos:
             # ETAPA 1: Carregar Arquivos com Openpyxl
             # ==================================================
             status_container.info("📄 Carregando arquivos...")
-            progress_bar.progress(5)
             
             with log_area:
                 st.text("📄 Carregando arquivo PARCEIRO...")
@@ -1682,7 +1792,6 @@ if processar and arquivos_prontos:
                 data_only=False  # Preservar fórmulas
             )
             
-            progress_bar.progress(10)
             
             # ==================================================
             # ETAPA 2: Validar Abas Necessárias
@@ -1700,13 +1809,12 @@ if processar and arquivos_prontos:
             with log_area:
                 st.text(f"✅ {mensagem}")
             
-            progress_bar.progress(15)
             
             # ==================================================
             # ETAPA 3: Clonar Template 'JAN.26' para target_month
             # ==================================================
             status_container.info(f"📝 Criando aba '{target_month}'...")
-            progress_bar.progress(20)
+
             
             with log_area:
                 st.text(f"📝 Preparando aba '{target_month}' a partir do template 'JAN.26'...")
@@ -1741,13 +1849,13 @@ if processar and arquivos_prontos:
                 st.text(f"✅ Aba '{target_month}' criada")
                 st.text("ℹ️ Estrutura clonada: Headers, larguras de coluna, formatação")
             
-            progress_bar.progress(25)
+
             
             # ==================================================
             # ETAPA 4: Limpar, Inserir Dados e Aplicar Regras
             # ==================================================
             status_container.info(f"📋 Processando aba '{target_month}'...")
-            progress_bar.progress(30)
+
             
             # Sub-etapa 4.1: Limpar dados antigos (manter header)
             with log_area:
@@ -1758,7 +1866,6 @@ if processar and arquivos_prontos:
             with log_area:
                 st.text("✅ Dados antigos removidos")
             
-            progress_bar.progress(35)
             
             # Sub-etapa 4.2: Inserir dados do parceiro nas colunas A-M
             with log_area:
@@ -1777,7 +1884,6 @@ if processar and arquivos_prontos:
             with log_area:
                 st.text(f"✅ {linhas_copiadas} linhas inseridas")
             
-            progress_bar.progress(45)
             
             # Sub-etapa 4.3: Aplicar regras de negócio nas colunas N-X
             with log_area:
@@ -1792,13 +1898,11 @@ if processar and arquivos_prontos:
             with log_area:
                 st.text(f"✅ Regras aplicadas ({resultado['ccbs_unicos']} CCBs únicos)")
             
-            progress_bar.progress(55)
             
             # ==================================================
             # ETAPA 5: Atualizar Aba BASE
             # ==================================================
             status_container.info("📊 Atualizando aba BASE...")
-            progress_bar.progress(60)
             
             with log_area:
                 st.text("📊 Atualizando aba BASE (Produção + Fórmulas)...")
@@ -1822,7 +1926,6 @@ if processar and arquivos_prontos:
             with log_area:
                 st.text(f"✅ {linhas_append} linhas de Produção adicionadas")
             
-            progress_bar.progress(70)
             
             # Sub-etapa 5.3: Atualizar BASE completa
             with log_area:
@@ -1840,8 +1943,6 @@ if processar and arquivos_prontos:
                 st.text(f"ℹ️ Coluna '{resultado_base['coluna_mes_inserida']}' inserida")
                 st.text(f"ℹ️ {resultado_base['linhas_formulas_aplicadas']} linhas atualizadas")
             
-            
-            progress_bar.progress(80)
 
 
             # ==================================================
@@ -1874,7 +1975,6 @@ if processar and arquivos_prontos:
 
                 # --- NOVO RAIO-X (Para confirmarmos que funcionou) ---
                 with log_area:
-                    st.markdown("---")
                     st.markdown("** Novo Raio-X (Leitura Direta):**")
                     try:
                         # Tenta pegar a coluna H (índice 7) ou procura pelo nome "Data"
@@ -1887,8 +1987,7 @@ if processar and arquivos_prontos:
                         st.text(f"Coluna '{col_alvo}' - Últimos valores agora:")
                         st.write(ultimas_datas)
                     except:
-                        st.error("Raio-X visual falhou, mas processo continua.")
-                    st.markdown("---")
+                        print("Raio-X visual falhou, mas processo continua.")
                 # ----------------------------------------
 
                 with log_area:
@@ -1914,13 +2013,11 @@ if processar and arquivos_prontos:
                 with log_area:
                     st.warning("⚠️ Etapa ignorada: Datas não definidas.")
 
-            progress_bar.progress(83)
             
             # ==================================================
             # ETAPA 5.4: Atualizar aba RESUMO (Mês Faturamento)
             # ==================================================
             status_container.info("📝 Atualizando aba RESUMO...")
-            progress_bar.progress(85)
             
             if 'RESUMO' in base_wb.sheetnames:
                 try:
@@ -1958,7 +2055,6 @@ if processar and arquivos_prontos:
                 with log_area:
                     st.text("⚠️ Aba RESUMO não encontrada")
             
-            progress_bar.progress(90)
             
             # ==================================================
             # ETAPA 6: Limpando Inadimplentes
@@ -1970,8 +2066,6 @@ if processar and arquivos_prontos:
             with log_area:
                 st.text(f"✅ {qtd_removidos} registros com 'Sim' foram removidos do histórico.")
             
-            progress_bar.progress(95)
-            progress_bar.progress(100)
             
             # ==================================================
             # ETAPA 7: Armazenar em Session State
@@ -1982,9 +2076,8 @@ if processar and arquivos_prontos:
         
         # Limpar status e mostrar sucesso final
         status_container.empty()
-        progress_bar.empty()
         
-        st.success("✅ Processamento concluído com sucesso!")
+        print("✅ Processamento concluído com sucesso!")
         
         # Mostrar resumo limpo
         col1, col2, col3 = st.columns(3)
@@ -1995,11 +2088,9 @@ if processar and arquivos_prontos:
         with col3:
             st.metric("CCBs Únicos", resultado['ccbs_unicos'])
         
-        st.balloons()
-        
     except Exception as e:
-        st.error(f"❌ Erro ao processar arquivos: {str(e)}")
-        st.exception(e)
+        print(f"❌ Erro ao processar arquivos: {str(e)}")
+        raise ValueError(f"Erro ao processar arquivos: {str(e)}")
 
 # ========================================
 # Resumo das Operações (se processado)
