@@ -54,15 +54,18 @@ async def processar_comissao(
         # =================================================================
         base_bytes = io.BytesIO(await arquivo_base.read())
         parceiro_bytes = io.BytesIO(await arquivo_parceiro.read())
+        print("📥 1. Arquivos recebidos pelo Render! Lendo para a memória...")
         
         parceiro_wb = openpyxl.load_workbook(parceiro_bytes, data_only=True)
         base_wb = openpyxl.load_workbook(base_bytes, data_only=False)
+        print("⚙️ 2. Carregando Workbooks no OpenPyxl (Isso pode demorar)...")
 
         # Converter datas recebidas do Front-end (String) para objetos Date do Python
         # Assumindo que o Lovable vai mandar no formato HTML padrão "YYYY-MM-DD"
         dt_inicio = datetime.strptime(data_inicio, "%Y-%m-%d").date()
         dt_fim = datetime.strptime(data_fim, "%Y-%m-%d").date()
-
+        
+        print("🚀 3. Iniciando limpeza e regras de negócio...")
         # =================================================================
         # ETAPA 2: LÓGICA DE NEGÓCIO PURA (Sem comandos Streamlit)
         # =================================================================
