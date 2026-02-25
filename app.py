@@ -1,9 +1,3 @@
-"""
-Ferramenta de Validação de Faturamento Excel
-Aplicação Streamlit para upload e processamento de arquivos Excel
-"""
-
-import streamlit as st
 import pandas as pd
 import openpyxl
 from io import BytesIO
