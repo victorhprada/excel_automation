@@ -1274,9 +1274,9 @@ def processar_inadimplentes(dados_filtrados, ws_destino, base_wb, nome_coluna_id
                     
             linha_destino += 1
             
-        st.warning(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados transferidos com sucesso.")
+        print(f"⚠️ {len(ids_inadimplentes)} Inadimplentes encontrados! Dados transferidos com sucesso.")
     else:
-        st.success("✅ Nenhum inadimplente encontrado neste ciclo.")
+        print("✅ Nenhum inadimplente encontrado neste ciclo.")
 
     if 'INADIMPLENTES' in base_wb.sheetnames:
         ws_inad = base_wb['INADIMPLENTES']
@@ -1331,7 +1331,7 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
     COLUNA_DATA_LETRA = 'F'  # <--- ALTERE AQUI SE FOR 'H' ou 'D'
     # ==============================================================================
 
-    st.markdown("#### 🕵️ Diagnóstico do Ciclo")
+    print("#### 🕵️ Diagnóstico do Ciclo")
     
     # 1. Preparar Aba Destino
     if target_month_name not in base_wb.sheetnames:
@@ -1363,7 +1363,7 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
         
         # Mostra exemplo para você conferir
         exemplo = coluna_datas_limpas.dropna().iloc[0] if not coluna_datas_limpas.dropna().empty else "Vazio"
-        st.caption(f"🔎 Exemplo de data lida: {exemplo}")
+        print(f"🔎 Exemplo de data lida: {exemplo}")
         
         # Aplica o Filtro
         mask = (coluna_datas_limpas >= data_inicio) & (coluna_datas_limpas <= data_fim)
@@ -1372,10 +1372,9 @@ def processar_ciclo_validacao(base_df, base_wb, target_month_name, data_inicio, 
         qtd = len(dados_filtrados)
         
         if qtd == 0:
-            st.warning(f"⚠️ Nenhuma linha encontrada entre {data_inicio} e {data_fim}.")
-            return 0
+            print(f"⚠️ Nenhuma linha encontrada entre {data_inicio} e {data_fim}.")
         else:
-            st.success(f"✅ Filtro OK! {qtd} registros encontrados.")
+            print(f"✅ Filtro OK! {qtd} registros encontrados.")
 
     except Exception as e:
         print(f"Erro ao processar datas: {e}")
