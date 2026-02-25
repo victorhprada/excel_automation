@@ -38,8 +38,8 @@ async def root():
         "versao": "1.0"
     }
 
-@app.post("/api/validar-faturamento")
-async def validar_faturamento(
+@app.post("/api/processar-comissao")
+async def processar_comissao(
     arquivo_base: UploadFile = File(...),
     arquivo_parceiro: UploadFile = File(...),
     
