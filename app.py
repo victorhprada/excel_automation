@@ -133,7 +133,7 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
     ws_resumo.cell(row=11, column=col_idx, value=f'=SUMIFS(BASE!$D:$D,BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<{data_fim_exclusivo_str}")')
     ws_resumo.cell(row=12, column=col_idx, value=f"=SUM('{target_month}'!L:L)")
     ws_resumo.cell(row=13, column=col_idx, value=f"=COUNTA('{target_month}'!O:O)-1")
-    ws_resumo.cell(row=14, column=col_idx, value=f'=COUNTIFS(\'{target_month}\'!R:R,">={data_ini_str}",\'{target_month}\'!R:R,"<{data_fim_exclusivo_str}")')
+    ws_resumo.cell(row=14, column=col_idx, value=f'=COUNTIFS(\'{target_month}\'!T:T,">={data_ini_str}",\'{target_month}\'!T:T,"<{data_fim_exclusivo_str}")')
     ws_resumo.cell(row=15, column=col_idx, value=f"={letra}13-{letra}14")
     ws_resumo.cell(row=17, column=col_idx, value=f"={letra}14-{letra}10")
     
