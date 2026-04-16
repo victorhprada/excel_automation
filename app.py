@@ -124,15 +124,16 @@ def atualizar_resumo_ciclo_pmt(base_wb, target_month):
     
     data_ini_str = data_ini.strftime("%d/%m/%Y")
     data_fim_str = data_fim.strftime("%d/%m/%Y")
+    data_fim_exclusivo_str = (data_fim + relativedelta(days=1)).strftime("%d/%m/%Y")
     header_str = f"{data_ini.strftime('%d/%m')} a {data_fim.strftime('%d/%m')} - {data_ini.year}"
     letra = get_column_letter(col_idx)
     
     ws_resumo.cell(row=9, column=col_idx, value=header_str)
-    ws_resumo.cell(row=10, column=col_idx, value=f'=COUNTIFS(BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
-    ws_resumo.cell(row=11, column=col_idx, value=f'=SUMIFS(BASE!$D:$D,BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<={data_fim_str}")')
+    ws_resumo.cell(row=10, column=col_idx, value=f'=COUNTIFS(BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<{data_fim_exclusivo_str}")')
+    ws_resumo.cell(row=11, column=col_idx, value=f'=SUMIFS(BASE!$D:$D,BASE!$H:$H,">={data_ini_str}",BASE!$H:$H,"<{data_fim_exclusivo_str}")')
     ws_resumo.cell(row=12, column=col_idx, value=f"=SUM('{target_month}'!L:L)")
     ws_resumo.cell(row=13, column=col_idx, value=f"=COUNTA('{target_month}'!O:O)-1")
-    ws_resumo.cell(row=14, column=col_idx, value=f'=COUNTIFS(\'{target_month}\'!R:R,">={data_ini_str}",\'{target_month}\'!R:R,"<={data_fim_str}")')
+    ws_resumo.cell(row=14, column=col_idx, value=f'=COUNTIFS(\'{target_month}\'!R:R,">={data_ini_str}",\'{target_month}\'!R:R,"<{data_fim_exclusivo_str}")')
     ws_resumo.cell(row=15, column=col_idx, value=f"={letra}13-{letra}14")
     ws_resumo.cell(row=17, column=col_idx, value=f"={letra}14-{letra}10")
     
